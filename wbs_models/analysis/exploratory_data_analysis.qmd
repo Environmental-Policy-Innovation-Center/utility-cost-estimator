@@ -1,0 +1,61 @@
+---
+title: "GAC Model Exploration"
+format: html
+---
+
+```{r}
+sheet_names <- readxl::excel_sheets("wbs_models/workbooks/granular-activated-carbon-gac.xlsm")
+
+# Loop through each sheet and extract first column of first 3 rows
+sheet_contents <- lapply(sheet_names, function(sheet) {
+  df <- readxl::read_excel("wbs_models/workbooks/granular-activated-carbon-gac.xlsm", 
+                           sheet = sheet,
+                           range = "A1:A3")  # Only first column
+  
+  df |> tidyr::pivot_longer(tidyr::everything())
+}) |> 
+  dplyr::bind_rows()
+
+
+colnames(sheet_contents) <- c("sheet_name", "content")
+
+sheet_contents <- sheet_contents |> dplyr::filter(!is.na(content))
+
+```
+
+```{python}
+import os
+import pandas as pd
+from oletools.olevba import VBA_Parser
+
+file_path = os.path.expanduser("wbs_models/workbooks/granular-activated-carbon-gac.xlsm")
+vbaparser = VBA_Parser(file_path)
+
+# The extract_macros() method returns a tuple for each VBA module found:
+# filename: The original file name
+# stream_path: The internal path within the Office file structure
+# vba_filename: The name of the VBA module (like "Sheet1", "ThisWorkbook", "Module1")
+# vba_code: The actual VBA source code as a string
+
+for (filename, stream_path, vba_filename, vba_code) in vbaparser.extract_macros():
+    print(f"Module: {vba_filename}")
+    print(vba_code)
+    print("-" * 80)
+
+
+modules = []
+for (filename, stream_path, vba_filename, vba_code) in vbaparser.extract_macros():
+    modules.append({
+        'filename': filename,
+        'stream_path': stream_path,
+        'module_name': vba_filename,
+        'code': vba_code,
+        'line_count': len(vba_code.split('\n'))
+    })
+
+df = pd.DataFrame(modules)
+df.to_csv("wbs_models/analysis/outputs/vba_modules.csv", index=False)
+print("Saved to vba_modules.csv")
+print(f"\nFound {len(modules)} modules:")
+print(df[['module_name', 'line_count']])
+```

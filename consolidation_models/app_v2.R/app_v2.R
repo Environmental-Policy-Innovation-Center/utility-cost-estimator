@@ -33,15 +33,15 @@ library(scales)
 # epa_sabs <- national_water_system[[1]] %>%
 #   st_as_sf() %>%
 #   left_join(pwsid_huc, by = "pwsid")
-
-sdwis <- national_water_system[[2]] %>%
-  select(pwsid, owner_type, health_viols_10yr, open_health_viol)
-
-owner_types <- c("All", sort(unique(sdwis$owner_type)))
-state_choices <- sort(unique(
-  str_extract_all(epa_sabs$epic_states_intersect, "[A-Z]{2}") %>%
-    unlist()
-))
+# 
+# sdwis <- national_water_system[[2]] %>%
+#   select(pwsid, owner_type, health_viols_10yr, open_health_viol)
+# 
+# owner_types <- c("All", sort(unique(sdwis$owner_type)))
+# state_choices <- sort(unique(
+#   str_extract_all(epa_sabs$epic_states_intersect, "[A-Z]{2}") %>%
+#     unlist()
+# ))
 
 # ── 1. Model functions -------------------------------------------------------
 
@@ -79,7 +79,7 @@ filter_sabs <- function(sabs, cons_sys_config, rec_sys_config) {
   list(cons = cons_sabs, rec = rec_sabs)
 }
 
-get_neighbors <- function(sabs, cutoff, cons_pwsids, rec_pwsids) {
+get_neighbors <- function(sabs, cutoff, cons_pwsids, rec_pwsids, progress) {
   message("Calculating centroids...")
   centroids <- st_centroid(sabs$geometry)
   centroid_distance_matrix <- st_distance(centroids, centroids)
@@ -88,7 +88,11 @@ get_neighbors <- function(sabs, cutoff, cons_pwsids, rec_pwsids) {
   
   df <- sabs %>%
     mutate(rec = map(1:n(), function(i) {
-      if (i %% 10 == 0) message("  Processing pwsid ", i, " of ", n())
+      if (i %% 10 == 0 && !is.null(progress)) {
+        shiny::withReactiveDomain(progress, {
+          setProgress(i / nrow(sabs), detail = sprintf("System %d of %d", i, nrow(sabs)))
+        })
+      }
       
       this_pwsid <- pwsid[i]
       
@@ -443,7 +447,8 @@ server <- function(input, output, session) {
         sabs        = rv$sabs_filtered,
         cutoff      = input$cutoff,
         cons_pwsids = rv$filtered_ids$cons,
-        rec_pwsids  = rv$filtered_ids$rec
+        rec_pwsids  = rv$filtered_ids$rec,
+        progress    = shiny::getDefaultReactiveDomain()
       )
       
       if (nrow(neighbors) == 0) {

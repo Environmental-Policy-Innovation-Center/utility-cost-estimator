@@ -1,0 +1,187 @@
+---
+title: "data_maker.Rmd"
+author: "Gabriel Watson"
+date: "2026-02-27"
+output: html_document
+---
+
+### Libraries 
+```{r}
+library(aws.s3)
+library(tidyverse)
+library(sf)
+```
+
+
+
+
+```{r}
+
+
+
+### Data Import
+national_water_system <- s3read_using(
+  readRDS,
+  object = "s3://tech-team-data/national-dw-tool/clean/national/national_water_system.RData")
+
+pwsid_huc <- s3read_using(
+  read.csv,
+  object = "s3://tech-team-data/national-dw-tool/test-staged/pwsid_npdes_usts_rmps_imp.csv") %>%
+  select(pwsid, num_facilities) %>%
+  group_by(pwsid) %>%
+  summarize(num_facilities = sum(num_facilities, na.rm = TRUE))
+
+epa_sabs <- national_water_system[[1]] %>%
+  st_as_sf() %>%
+  left_join(pwsid_huc, by = "pwsid")
+
+sdwis <- national_water_system[[2]] %>%
+  select(pwsid, owner_type, health_viols_10yr, open_health_viol)
+```
+
+
+```{r warning=FALSE}
+
+### Get Neighbors (simplified — runs for all systems in a given state subset)
+get_neighbors <- function(sabs, cutoff) {
+  message("Calculating centroids...")
+  centroids <- st_centroid(sabs$geometry)
+  centroid_distance_matrix <- st_distance(centroids, centroids)
+
+#  print("Processing ", nrow(sabs), " pwsids...")
+
+  df <- sabs %>%
+    mutate(rec = map(1:n(), function(i) {
+      
+     # print(i)
+      this_pwsid <- pwsid[i]
+      parent_geom   <- sabs$geometry[i]
+      candidate_idx <- which(pwsid != this_pwsid)
+
+      if (length(candidate_idx) == 0) {
+        return(tibble(pwsid = character(), centroid_distance = numeric(),
+                      travel_distance = numeric(), overlap = logical()))
+      }
+
+      centroid_distances <- as.numeric(centroid_distance_matrix[i, candidate_idx]) * 0.000621371
+      candidate_pwsids   <- pwsid[candidate_idx]
+      child_geoms        <- sabs$geometry[candidate_idx]
+      overlaps           <- st_overlaps(parent_geom, child_geoms, sparse = FALSE)[1, ]
+
+      matches <- tibble(
+        pwsid             = candidate_pwsids,
+        centroid_distance = centroid_distances,
+        overlap           = overlaps
+      ) %>%
+        filter(centroid_distance <= cutoff | overlap)
+
+      if (nrow(matches) == 0) {
+        return(tibble(pwsid = character(), centroid_distance = numeric(),
+                      travel_distance = numeric(), overlap = logical()))
+      }
+
+      matched_geoms <- sabs$geometry[sabs$pwsid %in% matches$pwsid]
+
+      travel_table <- tryCatch(
+        osrmTable(
+          src     = st_centroid(parent_geom),
+          dst     = st_centroid(matched_geoms),
+          measure = "distance"
+        ),
+        error = function(e) {
+          message("  OSRM error for pwsid ", this_pwsid, ": ", e$message, " — falling back")
+          NULL
+        }
+      )
+
+      matches %>%
+        mutate(
+          travel_distance = if (!is.null(travel_table)) {
+            as.numeric(travel_table$distances[1, ]) * 0.000621371
+          } else {
+            centroid_distance
+          },
+          overlap = st_overlaps(parent_geom, matched_geoms, sparse = FALSE)[1, ]
+        ) %>%
+        filter(travel_distance <= cutoff | overlap)
+    })) %>%
+    mutate(rec_num_neighbors = map_int(rec, nrow))
+
+  message("Unnesting...")
+  df <- unnest(df, rec, names_sep = "_")
+
+  df %>%
+    left_join(
+      sabs %>% st_drop_geometry() %>%
+        select(pwsid, num_facilities) %>%
+        rename(rec_pwsid = pwsid, rec_num_facilities = num_facilities),
+      by = "rec_pwsid"
+    ) %>%
+    mutate(rec_num_facilities = replace_na(rec_num_facilities, 0))
+}
+
+
+```
+
+
+
+### Run it 
+```{r warning=FALSE}
+### Run loop over each state, save to S3
+# states <- c(
+#   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+#   "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+#   "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+#   "VA","WA","WV","WI","WY"
+# )
+states <- c("RI")
+
+for (state in states) {
+  message("\n========== Processing state: ", state, " ==========")
+
+  state_sabs <- epa_sabs %>%
+    filter(str_detect(epic_states_intersect, state))
+
+  if (nrow(state_sabs) == 0) {
+    message("No data for ", state, " — skipping.")
+    next
+  }
+
+  neighbors <- tryCatch(
+    get_neighbors(state_sabs, cutoff = 25),
+    error = function(e) {
+      message("ERROR processing ", state, ": ", e$message)
+      NULL
+    }
+  )
+
+  if (is.null(neighbors)) next
+
+  # Simplify polygons slightly to reduce file size
+  neighbors_simplified <- neighbors %>%
+    mutate(geometry = st_simplify(geometry, preserveTopology = TRUE, dTolerance = 10))
+
+  # Save as GeoJSON to S3
+  tmp_file <- tempfile(fileext = ".geojson")
+  st_write(neighbors_simplified, tmp_file, driver = "GeoJSON", quiet = TRUE)
+
+  s3_path <- paste0("consolidation/mvp/state_data/", tolower(state), "_neighbors.geojson")
+  message("Saving ", state, " to s3://tech-team-data/", s3_path)
+
+  put_object(
+    file   = tmp_file,
+    object = s3_path,
+    bucket = "tech-team-data",
+    multipart = TRUE,
+    acl = "public-read"
+  )
+
+  file.remove(tmp_file)
+  message("Done: ", state)
+}
+
+message("\nAll states processed.")
+```
+
+
+

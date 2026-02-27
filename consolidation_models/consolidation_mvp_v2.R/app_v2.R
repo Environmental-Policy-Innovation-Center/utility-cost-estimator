@@ -17,31 +17,31 @@ library(scales)
 
 # ── 0. Data ------------------------------------------------------------------
 
-# national_water_system <- s3read_using(
-#   readRDS,
-#   object = "s3://tech-team-data/national-dw-tool/clean/national/national_water_system.RData"
-# )
-# 
-# pwsid_huc <- s3read_using(
-#   read.csv,
-#   object = "s3://tech-team-data/national-dw-tool/test-staged/pwsid_npdes_usts_rmps_imp.csv"
-# ) %>%
-#   select(pwsid, num_facilities) %>%
-#   group_by(pwsid) %>%
-#   summarize(num_facilities = sum(num_facilities, na.rm = TRUE))
-# 
-# epa_sabs <- national_water_system[[1]] %>%
-#   st_as_sf() %>%
-#   left_join(pwsid_huc, by = "pwsid")
-# 
-# sdwis <- national_water_system[[2]] %>%
-#   select(pwsid, owner_type, health_viols_10yr, open_health_viol)
-# 
-# owner_types <- c("All", sort(unique(sdwis$owner_type)))
-# state_choices <- sort(unique(
-#   str_extract_all(epa_sabs$epic_states_intersect, "[A-Z]{2}") %>%
-#     unlist()
-# ))
+national_water_system <- s3read_using(
+  readRDS,
+  object = "s3://tech-team-data/national-dw-tool/clean/national/national_water_system.RData"
+)
+
+pwsid_huc <- s3read_using(
+  read.csv,
+  object = "s3://tech-team-data/national-dw-tool/test-staged/pwsid_npdes_usts_rmps_imp.csv"
+) %>%
+  select(pwsid, num_facilities) %>%
+  group_by(pwsid) %>%
+  summarize(num_facilities = sum(num_facilities, na.rm = TRUE))
+
+epa_sabs <- national_water_system[[1]] %>%
+  st_as_sf() %>%
+  left_join(pwsid_huc, by = "pwsid")
+
+sdwis <- national_water_system[[2]] %>%
+  select(pwsid, owner_type, health_viols_10yr, open_health_viol)
+
+owner_types <- c("All", sort(unique(sdwis$owner_type)))
+state_choices <- sort(unique(
+  str_extract_all(epa_sabs$epic_states_intersect, "[A-Z]{2}") %>%
+    unlist()
+))
 
 # ── 1. Model functions -------------------------------------------------------
 

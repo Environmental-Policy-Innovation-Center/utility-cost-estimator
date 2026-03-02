@@ -1,0 +1,13 @@
+name: consolidation_mvp
+title: consolidation_mvp
+username: epic-tech
+account: epic-tech
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16496680
+bundleId: 11635849
+url: https://epic-tech.shinyapps.io/consolidation_mvp/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: app.R

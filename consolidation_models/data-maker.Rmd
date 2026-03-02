@@ -16,9 +16,6 @@ library(sf)
 
 
 ```{r}
-
-
-
 ### Data Import
 national_water_system <- s3read_using(
   readRDS,
@@ -35,8 +32,6 @@ epa_sabs <- national_water_system[[1]] %>%
   st_as_sf() %>%
   left_join(pwsid_huc, by = "pwsid")
 
-sdwis <- national_water_system[[2]] %>%
-  select(pwsid, owner_type, health_viols_10yr, open_health_viol)
 ```
 
 
@@ -66,7 +61,7 @@ get_neighbors <- function(sabs, cutoff) {
       centroid_distances <- as.numeric(centroid_distance_matrix[i, candidate_idx]) * 0.000621371
       candidate_pwsids   <- pwsid[candidate_idx]
       child_geoms        <- sabs$geometry[candidate_idx]
-      overlaps           <- st_overlaps(parent_geom, child_geoms, sparse = FALSE)[1, ]
+    suppressWarnings({  overlaps           <- st_overlaps(parent_geom, child_geoms, sparse = FALSE)[1, ]})
 
       matches <- tibble(
         pwsid             = candidate_pwsids,
@@ -106,7 +101,7 @@ get_neighbors <- function(sabs, cutoff) {
         filter(travel_distance <= cutoff | overlap)
     })) %>%
     mutate(rec_num_neighbors = map_int(rec, nrow))
-
+  
   message("Unnesting...")
   df <- unnest(df, rec, names_sep = "_")
 
@@ -124,9 +119,10 @@ get_neighbors <- function(sabs, cutoff) {
 ```
 
 
-
+## Adds vars and geoms for both consolidating and receiving system and saves out to S3 
 ### Run it 
 ```{r warning=FALSE}
+sf::sf_use_s2(FALSE)
 ### Run loop over each state, save to S3
 # states <- c(
 #   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
@@ -134,7 +130,13 @@ get_neighbors <- function(sabs, cutoff) {
 #   "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
 #   "VA","WA","WV","WI","WY"
 # )
-states <- c("RI")
+
+states <- c("HI","ID","IL","IN","IA",
+  "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+  "VA","WA","WV","WI","WY"
+)
+#states <- c("RI,CT")
 
 for (state in states) {
   message("\n========== Processing state: ", state, " ==========")
@@ -154,16 +156,45 @@ for (state in states) {
       NULL
     }
   )
-
   if (is.null(neighbors)) next
 
   # Simplify polygons slightly to reduce file size
   neighbors_simplified <- neighbors %>%
-    mutate(geometry = st_simplify(geometry, preserveTopology = TRUE, dTolerance = 10))
+  mutate(geometry = st_simplify(geometry, preserveTopology = TRUE, dTolerance = 10))%>%
+  select(pwsid,epic_states_intersect,pws_name,primacy_agency,
+         service_connections_count,service_area_type,detailed_facility_report,
+         num_facilities,rec_pwsid,rec_centroid_distance,rec_overlap,
+         rec_travel_distance,rec_num_neighbors,rec_num_facilities)
+  
+  pwsids <- neighbors_simplified %>% pull(pwsid) %>% unique(.)
+  rec_pwsids <- neighbors_simplified %>% pull(rec_pwsid) %>% unique(.)
+    
+  cons_vars <- national_water_system[[2]] %>%
+               data.frame()%>%
+               filter(pwsid %in% pwsids)%>%
+               select(pwsid, owner_type, health_viols_10yr, open_health_viol)
+  
+
+  rec_geos <- epa_sabs %>%
+              filter(pwsid %in% rec_pwsids)%>%
+              mutate(geometry = st_simplify(geometry, preserveTopology = TRUE, dTolerance = 10))%>%
+              data.frame()%>%
+              select(pwsid,pws_name,geometry)
+  
+  rec_vars <- national_water_system[[2]] %>%
+              data.frame()%>%
+              filter(pwsid %in% rec_pwsids)%>%
+              select(pwsid, owner_type, health_viols_10yr, open_health_viol)%>%
+              left_join(.,rec_geos)%>%
+              rename_with(~ paste0("rec_", .))
+              
+neighbors_full <- neighbors_simplified %>%
+                  left_join(.,cons_vars)%>%
+                  left_join(.,rec_vars)
 
   # Save as GeoJSON to S3
   tmp_file <- tempfile(fileext = ".geojson")
-  st_write(neighbors_simplified, tmp_file, driver = "GeoJSON", quiet = TRUE)
+  st_write(neighbors_full, tmp_file, driver = "GeoJSON", quiet = TRUE)
 
   s3_path <- paste0("consolidation/mvp/state_data/", tolower(state), "_neighbors.geojson")
   message("Saving ", state, " to s3://tech-team-data/", s3_path)

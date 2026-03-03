@@ -1,7 +1,7 @@
 # ============================================================
-#  Water System Consolidation Tool  —  v2
+#  Water System Consolidation Tool  —  v3 (simplified)
 #  Dependencies: shiny, leaflet, aws.s3, tidyverse, sf,
-#                stringr, osrm, DT, plotly, scales
+#                stringr, DT, plotly, scales
 # ============================================================
 
 library(shiny)
@@ -10,168 +10,65 @@ library(aws.s3)
 library(tidyverse)
 library(sf)
 library(stringr)
-library(osrm)
 library(DT)
 library(plotly)
 library(scales)
 
-# ── 0. Data ------------------------------------------------------------------
+# ── 0. Static lookups --------------------------------------------------------
 
-national_water_system <- s3read_using(
-  readRDS,
-  object = "s3://tech-team-data/national-dw-tool/clean/national/national_water_system.RData"
+owner_types <- c("All", "Federal", "Local", "Native American",
+                 "Private", "Public", "State")
+
+state_choices <- c(
+  "AK","AL","AR","AZ","CA","CO","CT","DC","DE","FL","GA","HI","IA","ID",
+  "IL","IN","KS","KY","LA","MA","MD","ME","MI","MN","MO","MS","MT","NC",
+  "ND","NE","NH","NJ","NM","NV","NY","OH","OK","OR","PA","RI","SC","SD",
+  "TN","TX","UT","VA","VT","WA","WI","WV","WY"
 )
-
-pwsid_huc <- s3read_using(
-  read.csv,
-  object = "s3://tech-team-data/national-dw-tool/test-staged/pwsid_npdes_usts_rmps_imp.csv"
-) %>%
-  select(pwsid, num_facilities) %>%
-  group_by(pwsid) %>%
-  summarize(num_facilities = sum(num_facilities, na.rm = TRUE))
-
-epa_sabs <- national_water_system[[1]] %>%
-  st_as_sf() %>%
-  left_join(pwsid_huc, by = "pwsid")
-
-sdwis <- national_water_system[[2]] %>%
-  select(pwsid, owner_type, health_viols_10yr, open_health_viol)
-
-owner_types <- c("All", sort(unique(sdwis$owner_type)))
-state_choices <- sort(unique(
-  str_extract_all(epa_sabs$epic_states_intersect, "[A-Z]{2}") %>%
-    unlist()
-))
 
 # ── 1. Model functions -------------------------------------------------------
 
-get_sabs <- function(ids, size = "small") {
-  if (size == "small") {
-    epa_sabs %>%
-      filter(pwsid %in% ids) %>%
-      select(pwsid, pws_name, epic_states_intersect,
-             service_connections_count, population_served_count, num_facilities)
-  } else {
-    epa_sabs %>% filter(pwsid %in% ids)
-  }
+load_state_data <- function(state) {
+  state_lc <- tolower(state)
+  
+  neighbors <- s3read_using(
+    read.csv,
+    object = sprintf("s3://tech-team-data/consolidation/mvp/state_data/%s_neighbors.csv", state_lc)
+  )
+  
+  sys_geo <- s3read_using(
+    st_read,
+    object = sprintf("s3://tech-team-data/consolidation/mvp/state_data/%s_sys_geo.geojson", state_lc),
+    quiet  = TRUE
+  ) %>% st_transform(4326)
+  
+  list(neighbors = neighbors, sys_geo = sys_geo)
 }
 
-filter_sabs <- function(sabs, cons_sys_config, rec_sys_config) {
-  base <- sabs %>% left_join(sdwis, by = "pwsid")
-  
-  owner_type_con <- cons_sys_config$owner_type
-  owner_type_rec <- rec_sys_config$owner_type
-  
-  cons_sabs <- base %>%
-    filter(health_viols_10yr >= cons_sys_config$health_viols_10yr) %>%
-    filter(open_health_viol  == cons_sys_config$open_health_viol) %>%
-    { if (owner_type_con != "All") filter(., owner_type == owner_type_con) else . } %>%
-    filter(population_served_count <= cons_sys_config$pop_served) %>%
-    pull(pwsid)
-  
-  rec_sabs <- base %>%
-    filter(health_viols_10yr <= rec_sys_config$health_viols_10yr) %>%
-    filter(open_health_viol  == rec_sys_config$open_health_viol) %>%
-    { if (owner_type_rec != "All") filter(., owner_type == owner_type_rec) else . } %>%
-    filter(population_served_count >= rec_sys_config$pop_served) %>%
-    pull(pwsid)
-  
-  list(cons = cons_sabs, rec = rec_sabs)
+filter_pairs <- function(neighbors, cons_cfg, rec_cfg) {
+  neighbors %>%
+    # ── Consolidating side ──
+    filter(as.numeric(health_viols_10yr) >= cons_cfg$health_viols_10yr |
+             is.na(as.numeric(health_viols_10yr))) %>%
+    filter(open_health_viol          == cons_cfg$open_health_viol) %>%
+    filter(population_served_count   <= cons_cfg$pop_served) %>%
+    { if (cons_cfg$owner_type != "All") filter(., owner_type == cons_cfg$owner_type) else . } %>%
+    # ── Receiving side ──
+    filter(as.numeric(rec_health_viols_10yr) <= rec_cfg$health_viols_10yr |
+             is.na(as.numeric(rec_health_viols_10yr))) %>%
+    filter(rec_open_health_viol        == rec_cfg$open_health_viol) %>%
+    filter(rec_population_served_count >= rec_cfg$pop_served) %>%
+    { if (rec_cfg$owner_type != "All") filter(., rec_owner_type == rec_cfg$owner_type) else . } %>%
+    # ── Distance cutoff ──
+    filter(rec_travel_distance <= rec_cfg$cutoff | rec_overlap == TRUE)
 }
 
-get_neighbors <- function(sabs, cutoff, cons_pwsids, rec_pwsids, progress) {
-  message("Calculating centroids...")
-  centroids <- st_centroid(sabs$geometry)
-  centroid_distance_matrix <- st_distance(centroids, centroids)
-  
-  message("Processing ", nrow(sabs), " pwsids...")
-  
-  df <- sabs %>%
-    mutate(rec = map(1:n(), function(i) {
-      if (i %% 10 == 0 && !is.null(progress)) {
-        shiny::withReactiveDomain(progress, {
-          setProgress(i / nrow(sabs), detail = sprintf("System %d of %d", i, nrow(sabs)))
-        })
-      }
-      
-      this_pwsid <- pwsid[i]
-      
-      if (!(this_pwsid %in% cons_pwsids)) {
-        return(tibble(pwsid = character(), centroid_distance = numeric(),
-                      travel_distance = numeric(), overlap = logical()))
-      }
-      
-      parent_geom   <- sabs$geometry[i]
-      candidate_idx <- which(pwsid != this_pwsid & pwsid %in% rec_pwsids)
-      
-      if (length(candidate_idx) == 0) {
-        return(tibble(pwsid = character(), centroid_distance = numeric(),
-                      travel_distance = numeric(), overlap = logical()))
-      }
-      
-      centroid_distances <- as.numeric(centroid_distance_matrix[i, candidate_idx]) * 0.000621371
-      candidate_pwsids   <- pwsid[candidate_idx]
-      child_geoms        <- sabs$geometry[candidate_idx]
-      overlaps           <- st_overlaps(parent_geom, child_geoms, sparse = FALSE)[1, ]
-      
-      matches <- tibble(
-        pwsid             = candidate_pwsids,
-        centroid_distance = centroid_distances,
-        overlap           = overlaps
-      ) %>%
-        filter(centroid_distance <= cutoff | overlap)
-      
-      if (nrow(matches) == 0) {
-        return(tibble(pwsid = character(), centroid_distance = numeric(),
-                      travel_distance = numeric(), overlap = logical()))
-      }
-      
-      matched_geoms <- sabs$geometry[sabs$pwsid %in% matches$pwsid]
-      
-      travel_table <- tryCatch(
-        osrmTable(
-          src     = st_centroid(parent_geom),
-          dst     = st_centroid(matched_geoms),
-          measure = "distance"
-        ),
-        error = function(e) {
-          message("  OSRM error for pwsid ", i, ": ", e$message, " — falling back")
-          NULL
-        }
-      )
-      
-      matches %>%
-        mutate(
-          travel_distance = if (!is.null(travel_table)) {
-            as.numeric(travel_table$distances[1, ]) * 0.000621371
-          } else {
-            centroid_distance
-          },
-          overlap = st_overlaps(parent_geom, matched_geoms, sparse = FALSE)[1, ]
-        ) %>%
-        filter(travel_distance <= cutoff | overlap)
-    })) %>%
-    mutate(rec_num_neighbors = map_int(rec, nrow))
-  
-  message("Unnesting...")
-  df <- unnest(df, rec, names_sep = "_")
-  
-  df %>%
-    left_join(
-      sabs %>% st_drop_geometry() %>%
-        select(pwsid, num_facilities) %>%
-        rename(rec_pwsid = pwsid, rec_num_facilities = num_facilities),
-      by = "rec_pwsid"
-    ) %>%
-    mutate(rec_num_facilities = replace_na(rec_num_facilities, 0))
-}
-
-get_costs <- function(neighbors,
+get_costs <- function(pairs,
                       cost_per_mile, connection_fee, service_line_fee,
                       admin_cost, contingency_const, planning_constuction_const,
                       engineering_services_const, inflation_const,
                       regional_multiplier_const) {
-  neighbors %>%
+  pairs %>%
     mutate(
       new_source_cost   = ifelse(rec_num_facilities > 0, 0, 1238933),
       pipe_line_cost    = rec_travel_distance * cost_per_mile,
@@ -182,7 +79,7 @@ get_costs <- function(neighbors,
     ) %>%
     rowwise() %>%
     mutate(
-      total_capital_costs = sum(c_across(new_source_cost:CEQA_cost)),
+      total_capital_costs  = sum(c_across(new_source_cost:CEQA_cost)),
       contingency          = total_capital_costs * contingency_const,
       planning_constuction = total_capital_costs * planning_constuction_const,
       engineering_services = total_capital_costs * engineering_services_const,
@@ -211,51 +108,44 @@ ui <- fluidPage(
                   margin-right: 6px; }
     .btn-step { width: 100%; margin-top: 6px; }
     #map { border-radius: 6px; }
-    /* Compact paired-row filter table */
     .filter-row { display: flex; align-items: center; margin-bottom: 4px; }
     .filter-row label { flex: 0 0 48%; font-size: 12px; color: #444;
                          margin: 0; padding-right: 8px; line-height: 1.2; }
     .filter-row .filter-input { flex: 1; }
     .filter-row .filter-input .form-group { margin-bottom: 0; }
     .filter-row .filter-input input,
-    .filter-row .filter-input select { height: 28px; padding: 2px 6px;
-                                        font-size: 12px; }
+    .filter-row .filter-input select { height: 28px; padding: 2px 6px; font-size: 12px; }
     .filter-section-label { font-size: 11px; font-weight: 700; color: #666;
                              text-transform: uppercase; letter-spacing: .5px;
                              margin: 6px 0 4px; }
   "))),
   
-  titlePanel("Water System Consolidation Tool — v2"),
+  titlePanel("Water System Consolidation Tool — v3"),
   
   sidebarLayout(
-    # ── Sidebar ──────────────────────────────────────────────────────────────
     sidebarPanel(
       width = 4,
       
-      # helper to render a paired label + input row
-      # (defined inline via local so it's available at UI build time)
-      
-      # Step 1 — State
+      # Step 1
       div(class = "sidebar-section",
           h5(HTML('<span class="step-badge">1</span>Select State')),
           div(class = "filter-row",
               tags$label("State"),
               div(class = "filter-input",
-                  selectInput("state", NULL, choices = state_choices, selected = "MD"))
+                  selectInput("state", NULL, choices = state_choices, selected = "HI"))
           ),
           actionButton("btn_state", "Load State", class = "btn-primary btn-step btn-sm")
       ),
       
-      # Step 2 — System filters
+      # Step 2
       div(class = "sidebar-section",
           h5(HTML('<span class="step-badge">2</span>Define Systems')),
           
           div(class = "filter-section-label", "Consolidating System Characteristics"),
-          
           div(class = "filter-row",
               tags$label("Owner Type"),
               div(class = "filter-input",
-                  selectInput("cons_owner", NULL, choices = owner_types, selected = "Private"))),
+                  selectInput("cons_owner", NULL, choices = owner_types, selected = "All"))),
           div(class = "filter-row",
               tags$label("Min Health Violations (10yr)"),
               div(class = "filter-input",
@@ -271,11 +161,10 @@ ui <- fluidPage(
           
           tags$hr(style = "margin: 8px 0;"),
           div(class = "filter-section-label", "Receiving System Characteristics"),
-          
           div(class = "filter-row",
               tags$label("Owner Type"),
               div(class = "filter-input",
-                  selectInput("rec_owner", NULL, choices = owner_types, selected = "Local"))),
+                  selectInput("rec_owner", NULL, choices = owner_types, selected = "All"))),
           div(class = "filter-row",
               tags$label("Max Health Violations (10yr)"),
               div(class = "filter-input",
@@ -293,15 +182,14 @@ ui <- fluidPage(
           div(class = "filter-row",
               tags$label("Distance Cutoff (miles)"),
               div(class = "filter-input",
-                  numericInput("cutoff", NULL, value = 5, min = 1))),
+                  numericInput("cutoff", NULL, value = 25, min = 1))),
           
           actionButton("btn_define", "Define Systems", class = "btn-success btn-step btn-sm")
       ),
       
-      # Step 3 — Costs
+      # Step 3
       div(class = "sidebar-section",
           h5(HTML('<span class="step-badge">3</span>Cost Parameters')),
-          
           div(class = "filter-row",
               tags$label("Cost per Mile ($)"),
               div(class = "filter-input",
@@ -338,34 +226,21 @@ ui <- fluidPage(
               tags$label("Regional Multiplier (%)"),
               div(class = "filter-input",
                   numericInput("regional", NULL, value = 0.10, step = 0.01))),
-          
           actionButton("btn_run", "Run Analysis", class = "btn-danger btn-step btn-sm")
       ),
       
       uiOutput("status_ui")
     ),
     
-    # ── Main panel ───────────────────────────────────────────────────────────
     mainPanel(
       width = 8,
-      # Map takes top 2/3
       leafletOutput("map", height = "420px"),
       br(),
-      # Tabs take bottom 1/3
       tabsetPanel(
         id = "tabs",
-        tabPanel("Consolidation Pairs",
-                 br(),
-                 DTOutput("results_table")
-        ),
-        tabPanel("Consolidating Cost Chart",
-                 br(),
-                 plotlyOutput("cost_chart", height = "320px")
-        ),
-        tabPanel("Consolidation Cost Summary",
-                 br(),
-                 uiOutput("cost_summary_ui")
-        )
+        tabPanel("Consolidation Pairs",        br(), DTOutput("results_table")),
+        tabPanel("Consolidating Cost Chart",   br(), plotlyOutput("cost_chart", height = "320px")),
+        tabPanel("Consolidation Cost Summary", br(), uiOutput("cost_summary_ui"))
       )
     )
   )
@@ -375,38 +250,47 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   
-  # Reactive state
   rv <- reactiveValues(
-    sabs          = NULL,   # full state sabs (small)
-    filtered_ids  = NULL,   # list(cons, rec)
-    sabs_filtered = NULL,   # sabs subset for analysis
-    costs         = NULL,   # cost df
-    selected_cons = NULL,   # currently highlighted cons pwsid
-    selected_pair = NULL    # currently highlighted rec pwsid (from table click)
+    neighbors     = NULL,
+    sys_geo       = NULL,
+    filtered      = NULL,
+    costs         = NULL,
+    selected_cons = NULL,   # pwsid of clicked consolidating system
+    selected_pair = NULL    # rec_pwsid from table row click
   )
   
   # ── Step 1: Load state ─────────────────────────────────────────────────────
   observeEvent(input$btn_state, {
-    withProgress(message = "Loading state systems...", {
-      ids <- epa_sabs %>%
-        filter(str_detect(epic_states_intersect, input$state)) %>%
-        pull(pwsid)
-      rv$sabs <- get_sabs(ids, "small")
-      rv$filtered_ids  <- NULL
-      rv$sabs_filtered <- NULL
-      rv$costs         <- NULL
-      rv$selected_cons <- NULL
-      showNotification(
-        sprintf("Loaded %d systems for %s.", nrow(rv$sabs), input$state),
-        type = "message", duration = 3
-      )
-    })
+    withProgress(message = sprintf("Loading %s data from S3...", input$state),
+                 detail = "This may take a moment for large states.", value = 0.2, {
+                   tryCatch({
+                     dat <- load_state_data(input$state)
+                     rv$neighbors     <- dat$neighbors
+                     rv$sys_geo       <- dat$sys_geo
+                     rv$filtered      <- NULL
+                     rv$costs         <- NULL
+                     rv$selected_cons <- NULL
+                     rv$selected_pair <- NULL
+                     setProgress(1)
+                     showNotification(
+                       sprintf("Loaded %d candidate pairs for %s.", nrow(dat$neighbors), input$state),
+                       type = "message", duration = 3
+                     )
+                     bbox <- st_bbox(dat$sys_geo)
+                     leafletProxy("map") %>%
+                       clearShapes() %>%
+                       clearControls() %>%
+                       fitBounds(bbox[[1]], bbox[[2]], bbox[[3]], bbox[[4]])
+                   }, error = function(e) {
+                     showNotification(paste("S3 load failed:", e$message), type = "error", duration = 8)
+                   })
+                 })
   })
   
-  # ── Step 2: Filter systems ─────────────────────────────────────────────────
+  # ── Step 2: Filter pairs ───────────────────────────────────────────────────
   observeEvent(input$btn_define, {
-    req(rv$sabs)
-    withProgress(message = "Filtering systems...", {
+    req(rv$neighbors)
+    withProgress(message = "Filtering pairs...", {
       cons_cfg <- list(
         open_health_viol  = input$cons_open_viol,
         health_viols_10yr = input$cons_viols,
@@ -417,49 +301,36 @@ server <- function(input, output, session) {
         open_health_viol  = input$rec_open_viol,
         health_viols_10yr = input$rec_viols,
         owner_type        = input$rec_owner,
-        pop_served        = input$rec_min_pop
-      )
-      rv$filtered_ids <- filter_sabs(rv$sabs, cons_cfg, rec_cfg)
-      rv$sabs_filtered <- rv$sabs %>%
-        filter(pwsid %in% c(rv$filtered_ids$cons, rv$filtered_ids$rec))
-      rv$costs <- NULL
-      
-      showNotification(
-        sprintf("%d consolidating | %d receiving systems identified.",
-                length(rv$filtered_ids$cons), length(rv$filtered_ids$rec)),
-        type = "message", duration = 4
+        pop_served        = input$rec_min_pop,
+        cutoff            = input$cutoff
       )
       
-      if (length(rv$filtered_ids$cons) == 0 || length(rv$filtered_ids$rec) == 0)
-        showNotification("No systems match — try relaxing filters.", type = "warning")
-    })
-  })
-  
-  # ── Step 3: Run cost analysis ──────────────────────────────────────────────
-  observeEvent(input$btn_run, {
-    req(rv$sabs_filtered, rv$filtered_ids)
-    req(length(rv$filtered_ids$cons) > 0, length(rv$filtered_ids$rec) > 0)
-    
-    withProgress(message = "Running analysis...", value = 0, {
-      setProgress(0.1, detail = "Finding neighbors (OSRM)...")
+      filtered <- filter_pairs(rv$neighbors, cons_cfg, rec_cfg)
       
-      neighbors <- get_neighbors(
-        sabs        = rv$sabs_filtered,
-        cutoff      = input$cutoff,
-        cons_pwsids = rv$filtered_ids$cons,
-        rec_pwsids  = rv$filtered_ids$rec,
-        progress    = shiny::getDefaultReactiveDomain()
-      )
-      
-      if (nrow(neighbors) == 0) {
-        showNotification("No pairs found. Try relaxing distance or filters.",
-                         type = "warning")
+      if (nrow(filtered) == 0) {
+        showNotification("No pairs match — try relaxing filters.", type = "warning")
         return()
       }
       
-      setProgress(0.85, detail = "Calculating costs...")
+      rv$filtered      <- filtered
+      rv$costs         <- NULL
+      rv$selected_cons <- NULL
+      rv$selected_pair <- NULL
+      
+      showNotification(
+        sprintf("%d consolidating | %d receiving systems identified (%d pairs).",
+                n_distinct(filtered$pwsid), n_distinct(filtered$rec_pwsid), nrow(filtered)),
+        type = "message", duration = 4
+      )
+    })
+  })
+  
+  # ── Step 3: Apply costs ────────────────────────────────────────────────────
+  observeEvent(input$btn_run, {
+    req(rv$filtered)
+    withProgress(message = "Calculating costs...", value = 0.3, {
       rv$costs <- get_costs(
-        neighbors,
+        rv$filtered,
         cost_per_mile              = input$cost_per_mile,
         connection_fee             = input$connection_fee,
         service_line_fee           = input$service_line,
@@ -470,11 +341,8 @@ server <- function(input, output, session) {
         inflation_const            = input$inflation,
         regional_multiplier_const  = input$regional
       )
-      
-      # Default selection = first cons system
       rv$selected_cons <- unique(rv$costs$pwsid)[1]
       rv$selected_pair <- NULL
-      
       setProgress(1)
       showNotification(
         sprintf("Done! %d pairs across %d consolidating systems.",
@@ -486,106 +354,158 @@ server <- function(input, output, session) {
   
   # ── Status badge ───────────────────────────────────────────────────────────
   output$status_ui <- renderUI({
-    if (!is.null(rv$costs)) {
+    if (!is.null(rv$costs) && "total_project_cost" %in% names(rv$costs)) {
       div(style = "color:green; font-size:12px; margin-top:6px;",
-          icon("check-circle"),
-          sprintf(" %d pairs ready", nrow(rv$costs)))
-    } else if (!is.null(rv$sabs_filtered)) {
+          icon("check-circle"), sprintf(" %d pairs ready", nrow(rv$costs)))
+    } else if (!is.null(rv$filtered)) {
       div(style = "color:orange; font-size:12px; margin-top:6px;",
           icon("hourglass-half"),
-          sprintf(" %d cons / %d rec systems — run costs",
-                  length(rv$filtered_ids$cons), length(rv$filtered_ids$rec)))
-    } else if (!is.null(rv$sabs)) {
+          sprintf(" %d pairs filtered — run costs", nrow(rv$filtered)))
+    } else if (!is.null(rv$neighbors)) {
       div(style = "color:#555; font-size:12px; margin-top:6px;",
-          icon("map"), sprintf(" %d systems loaded", nrow(rv$sabs)))
+          icon("map"), sprintf(" %d raw pairs loaded", nrow(rv$neighbors)))
     }
   })
   
-  # ── Map base ───────────────────────────────────────────────────────────────
+  # ── Map base tile (rendered once) ──────────────────────────────────────────
   output$map <- renderLeaflet({
     leaflet() %>%
       addProviderTiles(providers$CartoDB.Positron) %>%
       setView(lng = -95, lat = 37, zoom = 4)
   })
   
-  # Render all polygons once costs are ready
-  observe({
-    req(rv$costs, rv$sabs_filtered)
+  # ── Draw ALL base polygons once when costs are computed ────────────────────
+  # These stay on the map permanently until a new filter/cost run replaces them.
+  observeEvent(rv$costs, {
+    req(rv$costs, rv$sys_geo)
     costs <- rv$costs
-    sabs  <- rv$sabs_filtered
     
-    cons_sf <- sabs %>%
-      filter(pwsid %in% unique(costs$pwsid)) %>%
-      st_transform(4326)
-    rec_sf  <- sabs %>%
-      filter(pwsid %in% unique(costs$rec_pwsid)) %>%
-      st_transform(4326)
+    # Build one-row-per-system lookup tables directly from costs
+    cons_ids <- unique(costs$pwsid)
+    rec_ids  <- unique(costs$rec_pwsid)
     
-    bbox <- st_bbox(st_transform(
-      sabs %>% filter(pwsid %in% c(unique(costs$pwsid), unique(costs$rec_pwsid))), 4326
+    cons_info <- costs %>%
+      distinct(pwsid, pws_name, population_served_count,
+               service_connections_count, owner_type, health_viols_10yr)
+    
+    rec_info <- costs %>%
+      distinct(rec_pwsid, rec_pws_name, rec_population_served_count,
+               rec_owner_type, rec_health_viols_10yr)
+    
+    # Join geometry
+    cons_sf <- rv$sys_geo %>%
+      filter(pwsid %in% cons_ids) %>%
+      left_join(cons_info, by = "pwsid")
+    
+    rec_sf <- rv$sys_geo %>%
+      filter(pwsid %in% rec_ids) %>%
+      left_join(rec_info, by = c("pwsid" = "rec_pwsid"))
+    
+    bbox <- st_bbox(bind_rows(
+      cons_sf %>% select(geometry),
+      rec_sf  %>% select(geometry)
     ))
     
+    # Draw base layer — group = "base" so we can clear it on re-run
     leafletProxy("map") %>%
       clearShapes() %>%
       clearControls() %>%
       addPolygons(
-        data        = cons_sf,
-        fillColor   = "green", fillOpacity = 0.45,
-        color       = "darkgreen", weight = 1.5,
-        layerId     = ~pwsid,
-        popup       = ~paste0("<b>", pws_name, "</b><br>",
-                              pwsid, "<br><i>Consolidating</i>")
+        data = cons_sf, group = "base",
+        fillColor = "green", fillOpacity = 0.45,
+        color = "darkgreen", weight = 1.5,
+        layerId = ~pwsid,
+        popup = ~paste0(
+          "<b>", pws_name, "</b><br>", pwsid,
+          "<br>Pop: ", scales::comma(population_served_count),
+          "<br>Owner: ", owner_type,
+          "<br>Violations (10yr): ", health_viols_10yr,
+          "<br><i>Consolidating</i>"
+        )
       ) %>%
       addPolygons(
-        data        = rec_sf,
-        fillColor   = "steelblue", fillOpacity = 0.35,
-        color       = "navy", weight = 1.5,
-        popup       = ~paste0("<b>", pws_name, "</b><br>",
-                              pwsid, "<br><i>Receiving</i>")
+        data = rec_sf, group = "base",
+        fillColor = "steelblue", fillOpacity = 0.35,
+        color = "navy", weight = 1.5,
+        layerId = ~pwsid,
+        popup = ~paste0(
+          "<b>", rec_pws_name, "</b><br>", pwsid,
+          "<br>Pop: ", scales::comma(rec_population_served_count),
+          "<br>Owner: ", rec_owner_type,
+          "<br>Violations (10yr): ", rec_health_viols_10yr,
+          "<br><i>Receiving</i>"
+        )
       ) %>%
       addLegend("bottomright",
-                colors = c("green", "steelblue"),
-                labels = c("Consolidating", "Receiving"),
-                opacity = 0.7
-      ) %>%
+                colors  = c("green", "steelblue"),
+                labels  = c("Consolidating", "Receiving"),
+                opacity = 0.7) %>%
       fitBounds(bbox[[1]], bbox[[2]], bbox[[3]], bbox[[4]])
   })
   
-  # Highlight selected cons + its pairs
+  # ── Highlight selected system + its partners ───────────────────────────────
+  # This ONLY touches the "highlight" group. Base polygons are never removed.
   observe({
-    req(rv$costs, rv$sabs_filtered, rv$selected_cons)
-    sel_id   <- rv$selected_cons
-    costs    <- rv$costs
-    sabs     <- rv$sabs_filtered
+    req(rv$costs, rv$sys_geo, rv$selected_cons)
+    costs  <- rv$costs
+    sel_id <- rv$selected_cons
     
-    sel_sf   <- sabs %>% filter(pwsid == sel_id) %>% st_transform(4326)
-    pairs_sf <- sabs %>%
-      filter(pwsid %in% filter(costs, pwsid == sel_id)$rec_pwsid) %>%
-      st_transform(4326)
+    # The selected consolidating system's info (one row)
+    sel_info <- costs %>%
+      filter(pwsid == sel_id) %>%
+      slice(1) %>%
+      select(pwsid, pws_name, population_served_count, owner_type, health_viols_10yr)
     
-    bbox <- st_bbox(bind_rows(sel_sf, pairs_sf) %>% st_transform(4326))
+    sel_sf <- rv$sys_geo %>%
+      filter(pwsid == sel_id) %>%
+      left_join(sel_info, by = "pwsid")
     
+    # Its receiving partners
+    partner_ids <- costs %>% filter(pwsid == sel_id) %>% pull(rec_pwsid) %>% unique()
+    
+    partner_info <- costs %>%
+      filter(pwsid == sel_id) %>%
+      distinct(rec_pwsid, rec_pws_name, rec_population_served_count,
+               rec_owner_type, rec_health_viols_10yr)
+    
+    partner_sf <- rv$sys_geo %>%
+      filter(pwsid %in% partner_ids) %>%
+      left_join(partner_info, by = c("pwsid" = "rec_pwsid"))
+    
+    bbox <- st_bbox(bind_rows(
+      sel_sf     %>% select(geometry),
+      partner_sf %>% select(geometry)
+    ))
+    
+    # Only clear and redraw the highlight group — base stays untouched
     leafletProxy("map") %>%
       clearGroup("highlight") %>%
       addPolygons(
-        data        = pairs_sf, group = "highlight",
-        fillColor   = "#1e90ff", fillOpacity = 0.7,
-        color       = "darkblue", weight = 2.5,
-        popup       = ~paste0("<b>", pws_name, "</b><br>",
-                              pwsid, "<br><i>Receiving</i>")
+        data = partner_sf, group = "highlight",
+        fillColor = "#1e90ff", fillOpacity = 0.7,
+        color = "darkblue", weight = 2.5,
+        popup = ~paste0(
+          "<b>", rec_pws_name, "</b><br>", pwsid,
+          "<br>Pop: ", scales::comma(rec_population_served_count),
+          "<br>Owner: ", rec_owner_type,
+          "<br><i>Receiving</i>"
+        )
       ) %>%
       addPolygons(
-        data        = sel_sf, group = "highlight",
-        fillColor   = "#2ecc71", fillOpacity = 0.85,
-        color       = "#145a32", weight = 3,
-        layerId     = ~pwsid,   # preserve click-to-select behaviour
-        popup       = ~paste0("<b>", pws_name, "</b><br>",
-                              pwsid, "<br><i>Consolidating</i>")
-      )%>%
+        data = sel_sf, group = "highlight",
+        fillColor = "#2ecc71", fillOpacity = 0.85,
+        color = "#145a32", weight = 3,
+        popup = ~paste0(
+          "<b>", pws_name, "</b><br>", pwsid,
+          "<br>Pop: ", scales::comma(population_served_count),
+          "<br>Owner: ", owner_type,
+          "<br><i>Consolidating (selected)</i>"
+        )
+      ) %>%
       fitBounds(bbox[[1]], bbox[[2]], bbox[[3]], bbox[[4]])
   })
   
-  # Map click → update selected cons
+  # ── Map click → update selection ───────────────────────────────────────────
   observeEvent(input$map_shape_click, {
     id <- input$map_shape_click$id
     req(id, rv$costs)
@@ -596,30 +516,21 @@ server <- function(input, output, session) {
   })
   
   # ── Results table ──────────────────────────────────────────────────────────
-  # Show only rows for selected cons system
   selected_pairs_df <- reactive({
-    req(rv$costs)
+    req(rv$costs, "total_project_cost" %in% names(rv$costs))
     rv$costs %>%
-      st_drop_geometry() %>%
-      left_join(
-        rv$sabs_filtered %>% st_drop_geometry() %>%
-          select(pwsid, pws_name) %>%
-          rename(rec_pwsid = pwsid, rec_name = pws_name),
-        by = "rec_pwsid"
-      ) %>%
       select(
         pwsid, pws_name,
-        rec_pwsid, rec_name,
+        rec_pwsid, rec_pws_name,
         rec_centroid_distance, rec_travel_distance, rec_overlap,
         service_connections_count,
         total_capital_costs, total_markup, total_project_cost
       )
   })
   
-  
   output$results_table <- renderDT({
     req(selected_pairs_df())
-    df <- selected_pairs_df() %>%
+    selected_pairs_df() %>%
       mutate(
         across(c(total_capital_costs, total_markup, total_project_cost), dollar),
         across(c(rec_centroid_distance, rec_travel_distance), ~round(., 2))
@@ -628,7 +539,7 @@ server <- function(input, output, session) {
         "Cons. PWSID"        = pwsid,
         "Cons. Name"         = pws_name,
         "Rec. PWSID"         = rec_pwsid,
-        "Rec. Name"          = rec_name,
+        "Rec. Name"          = rec_pws_name,
         "Centroid Dist (mi)" = rec_centroid_distance,
         "Travel Dist (mi)"   = rec_travel_distance,
         "Overlap"            = rec_overlap,
@@ -636,96 +547,61 @@ server <- function(input, output, session) {
         "Capital Costs"      = total_capital_costs,
         "Markup"             = total_markup,
         "Total Cost"         = total_project_cost
-      )
-    datatable(df,
-              selection = "single",
-              rownames  = FALSE,
-              options   = list(pageLength = 8, scrollX = TRUE, dom = "tip")
-    )
+      ) %>%
+      datatable(selection = "single", rownames = FALSE,
+                options = list(pageLength = 8, scrollX = TRUE, dom = "tip"))
   })
   
-  # Table row click → zoom map to that pair
+  # Table row click → zoom to that pair
   observeEvent(input$results_table_rows_selected, {
-    req(rv$costs, rv$sabs_filtered)
-    row_idx <- input$results_table_rows_selected
-    req(row_idx)
-    
+    req(rv$costs, rv$sys_geo)
+    row_idx  <- input$results_table_rows_selected
     pair_row <- selected_pairs_df()[row_idx, ]
-    cons_id  <- pair_row$pwsid
-    rec_id   <- pair_row$rec_pwsid
     
-    rv$selected_cons <- cons_id
-    rv$selected_pair <- rec_id
-    
-    cons_sf <- rv$sabs_filtered %>% filter(pwsid == cons_id) %>% st_transform(4326)
-    rec_sf  <- rv$sabs_filtered %>% filter(pwsid == rec_id)  %>% st_transform(4326)
-    bbox    <- st_bbox(bind_rows(cons_sf, rec_sf))
-    
-    leafletProxy("map") %>%
-      fitBounds(bbox[[1]], bbox[[2]], bbox[[3]], bbox[[4]])
+    rv$selected_cons <- pair_row$pwsid
+    rv$selected_pair <- pair_row$rec_pwsid
   })
   
   # ── Cost chart ─────────────────────────────────────────────────────────────
   output$cost_chart <- renderPlotly({
-    req(selected_pairs_df())
-    df <- selected_pairs_df()
+    req(rv$costs, rv$selected_cons, "total_project_cost" %in% names(rv$costs))
     
-    # If a row is selected focus on that, else show all pairs for this cons
-    if (!is.null(rv$selected_pair)) {
-      df <- df %>% filter(rec_pwsid == rv$selected_pair)
-    }
-    
-    # Long format cost components
     cost_cols <- c("new_source_cost", "pipe_line_cost", "connection_fees",
                    "service_line_cost", "admin_costs", "CEQA_cost",
                    "contingency", "planning_constuction", "engineering_services",
                    "inflation", "regional_multiplier")
     
     plot_df <- rv$costs %>%
-      st_drop_geometry() %>%
       filter(pwsid == rv$selected_cons) %>%
       { if (!is.null(rv$selected_pair)) filter(., rec_pwsid == rv$selected_pair) else . } %>%
-      left_join(
-        rv$sabs_filtered %>% st_drop_geometry() %>%
-          select(pwsid, pws_name) %>% rename(rec_pwsid = pwsid, rec_name = pws_name),
-        by = "rec_pwsid"
-      ) %>%
-      select(rec_name, all_of(cost_cols)) %>%
-      pivot_longer(-rec_name, names_to = "component", values_to = "cost") %>%
+      select(rec_pws_name, all_of(cost_cols)) %>%
+      pivot_longer(-rec_pws_name, names_to = "component", values_to = "cost") %>%
       mutate(component = str_replace_all(component, "_", " ") %>% str_to_title())
     
-    plot_ly(plot_df, x = ~rec_name, y = ~cost, color = ~component,
+    plot_ly(plot_df, x = ~rec_pws_name, y = ~cost, color = ~component,
             type = "bar", text = ~dollar(cost), textposition = "none",
             hovertemplate = "%{x}<br>%{data.name}: %{y:$,.0f}<extra></extra>") %>%
       layout(
-        barmode  = "stack",
-        xaxis    = list(title = "Receiving System"),
-        yaxis    = list(title = "Cost ($)", tickformat = "$,.0f"),
-        legend   = list(orientation = "h", y = -0.25),
-        margin   = list(b = 100)
+        barmode = "stack",
+        xaxis   = list(title = "Receiving System"),
+        yaxis   = list(title = "Cost ($)", tickformat = "$,.0f"),
+        legend  = list(orientation = "h", y = -0.25),
+        margin  = list(b = 100)
       )
   })
   
   # ── Summary panel ──────────────────────────────────────────────────────────
   output$cost_summary_ui <- renderUI({
-    req(rv$costs, rv$selected_cons)
+    req(rv$costs, rv$selected_cons, "total_project_cost" %in% names(rv$costs))
     
     pairs <- rv$costs %>%
-      st_drop_geometry() %>%
       filter(pwsid == rv$selected_cons) %>%
-      left_join(
-        rv$sabs_filtered %>% st_drop_geometry() %>%
-          select(pwsid, pws_name) %>% rename(rec_pwsid = pwsid, rec_name = pws_name),
-        by = "rec_pwsid"
-      ) %>%
       arrange(total_project_cost)
-    
-    cons_name <- pairs$pws_name[1]
     
     header <- div(
       style = "background:#2c3e50; color:white; padding:10px 14px;
                 border-radius:6px 6px 0 0; margin-bottom:0;",
-      tags$b(cons_name), " — ", tags$small(rv$selected_cons),
+      tags$b(pairs$pws_name[1]), " — ", tags$small(rv$selected_cons),
       tags$span(style = "float:right;",
                 sprintf("%d potential receiving system(s)", nrow(pairs)))
     )
@@ -733,11 +609,11 @@ server <- function(input, output, session) {
     rows <- lapply(seq_len(nrow(pairs)), function(i) {
       p <- pairs[i, ]
       div(
-        style = "border: 1px solid #dee2e6; border-radius:4px;
+        style = "border:1px solid #dee2e6; border-radius:4px;
                   padding:10px; margin-bottom:8px; background:#fff;",
         fluidRow(
           column(4,
-                 tags$b(p$rec_name), br(),
+                 tags$b(p$rec_pws_name), br(),
                  tags$small(p$rec_pwsid), br(),
                  tags$small(sprintf("Travel: %.2f mi | Overlap: %s",
                                     p$rec_travel_distance,

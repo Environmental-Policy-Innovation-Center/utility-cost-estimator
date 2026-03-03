@@ -10,6 +10,7 @@ output: html_document
 library(aws.s3)
 library(tidyverse)
 library(sf)
+library(osrm)
 ```
 
 
@@ -115,7 +116,6 @@ get_neighbors <- function(sabs, cutoff) {
     mutate(rec_num_facilities = replace_na(rec_num_facilities, 0))
 }
 
-
 ```
 
 
@@ -124,19 +124,19 @@ get_neighbors <- function(sabs, cutoff) {
 ```{r warning=FALSE}
 sf::sf_use_s2(FALSE)
 ### Run loop over each state, save to S3
-# states <- c(
-#   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+states <- c("MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+  "VA","WA","WV","WI","WY"
+)
+
+# states <- c("IL","IN","IA",
 #   "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
 #   "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
 #   "VA","WA","WV","WI","WY"
 # )
 
-states <- c("HI","ID","IL","IN","IA",
-  "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
-  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
-  "VA","WA","WV","WI","WY"
-)
-#states <- c("RI,CT")
+
+#states <- c("HI")
 
 for (state in states) {
   message("\n========== Processing state: ", state, " ==========")
@@ -158,56 +158,62 @@ for (state in states) {
   )
   if (is.null(neighbors)) next
 
-  # Simplify polygons slightly to reduce file size
   neighbors_simplified <- neighbors %>%
-  mutate(geometry = st_simplify(geometry, preserveTopology = TRUE, dTolerance = 10))%>%
-  select(pwsid,epic_states_intersect,pws_name,primacy_agency,
-         service_connections_count,service_area_type,detailed_facility_report,
-         num_facilities,rec_pwsid,rec_centroid_distance,rec_overlap,
-         rec_travel_distance,rec_num_neighbors,rec_num_facilities)
-  
-  pwsids <- neighbors_simplified %>% pull(pwsid) %>% unique(.)
-  rec_pwsids <- neighbors_simplified %>% pull(rec_pwsid) %>% unique(.)
-    
-  cons_vars <- national_water_system[[2]] %>%
-               data.frame()%>%
-               filter(pwsid %in% pwsids)%>%
-               select(pwsid, owner_type, health_viols_10yr, open_health_viol)
-  
+ #   mutate(geometry = st_simplify(geometry, preserveTopology = TRUE, dTolerance = 10)) %>%
+    select(
+      pwsid, epic_states_intersect, pws_name, primacy_agency,
+      population_served_count, service_connections_count, service_area_type,
+      detailed_facility_report, num_facilities, rec_pwsid,
+      rec_centroid_distance, rec_overlap, rec_travel_distance,
+      rec_num_neighbors, rec_num_facilities
+    )
 
-  rec_geos <- epa_sabs %>%
-              filter(pwsid %in% rec_pwsids)%>%
-              mutate(geometry = st_simplify(geometry, preserveTopology = TRUE, dTolerance = 10))%>%
-              data.frame()%>%
-              select(pwsid,pws_name,geometry)
-  
-  rec_vars <- national_water_system[[2]] %>%
-              data.frame()%>%
-              filter(pwsid %in% rec_pwsids)%>%
-              select(pwsid, owner_type, health_viols_10yr, open_health_viol)%>%
-              left_join(.,rec_geos)%>%
-              rename_with(~ paste0("rec_", .))
-              
-neighbors_full <- neighbors_simplified %>%
-                  left_join(.,cons_vars)%>%
-                  left_join(.,rec_vars)
-
-  # Save as GeoJSON to S3
-  tmp_file <- tempfile(fileext = ".geojson")
-  st_write(neighbors_full, tmp_file, driver = "GeoJSON", quiet = TRUE)
-
-  s3_path <- paste0("consolidation/mvp/state_data/", tolower(state), "_neighbors.geojson")
-  message("Saving ", state, " to s3://tech-team-data/", s3_path)
-
-  put_object(
-    file   = tmp_file,
-    object = s3_path,
-    bucket = "tech-team-data",
-    multipart = TRUE,
-    acl = "public-read"
+  all_pwsids <- union(
+    unique(neighbors_simplified$pwsid),
+    unique(neighbors_simplified$rec_pwsid)
   )
 
-  file.remove(tmp_file)
+  sys_vars <- national_water_system[[2]] %>%
+    data.frame() %>%
+    filter(pwsid %in% all_pwsids) %>%
+    select(pwsid, owner_type, health_viols_10yr, open_health_viol)
+
+  # ── 1. Neighbors CSV (no geometry) ────────────────────────────────────────
+  neighbors_csv <- neighbors_simplified %>%
+    st_drop_geometry() %>%
+    left_join(sys_vars, by = "pwsid") %>%
+    left_join(
+      sys_vars %>% rename_with(~ paste0("rec_", .), -pwsid) %>% rename(rec_pwsid = pwsid),
+      by = "rec_pwsid"
+    ) %>%
+    left_join(
+      epa_sabs %>% st_drop_geometry() %>%
+        select(rec_pwsid = pwsid, rec_population_served_count = population_served_count, rec_pws_name = pws_name),
+      by = "rec_pwsid"
+    )
+
+  tmp_csv <- tempfile(fileext = ".csv")
+  write.csv(neighbors_csv, tmp_csv, row.names = FALSE)
+  s3_csv <- paste0("consolidation/mvp/state_data/", tolower(state), "_neighbors.csv")
+  message("Saving neighbors CSV for ", state)
+  put_object(file = tmp_csv, object = s3_csv, bucket = "tech-team-data",
+             multipart = TRUE, acl = "public-read")
+  file.remove(tmp_csv)
+
+  # ── 2. System geometries GeoJSON (pwsid + geometry only) ─────────────────
+  sys_geo <- epa_sabs %>%
+    filter(pwsid %in% all_pwsids) %>%
+  #  mutate(geometry = st_simplify(geometry, preserveTopology = TRUE, dTolerance = 10)) %>%
+    select(pwsid, geometry)
+
+  tmp_geo <- tempfile(fileext = ".geojson")
+  st_write(sys_geo, tmp_geo, driver = "GeoJSON", quiet = TRUE)
+  s3_geo <- paste0("consolidation/mvp/state_data/", tolower(state), "_sys_geo.geojson")
+  message("Saving system GeoJSON for ", state)
+  put_object(file = tmp_geo, object = s3_geo, bucket = "tech-team-data",
+             multipart = TRUE, acl = "public-read")
+  file.remove(tmp_geo)
+
   message("Done: ", state)
 }
 

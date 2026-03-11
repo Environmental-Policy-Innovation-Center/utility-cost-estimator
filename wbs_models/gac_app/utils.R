@@ -533,6 +533,16 @@ calculate_autosize_bed_depth <- function(design_flow_mgd,
   clamped_depth <- max(min_bed_depth, min(calculated_depth, max_bed_depth))
   final_depth   <- ceiling(clamped_depth * 10) / 10
 
+
+  #===bed depth debug===#
+  message(sprintf("[vessel_diameter debug] vessel_diameter    = %s", vessel_diameter))
+  message(sprintf("[vessel_thickness debug] vessel_thickness    = %s", vessel_thickness))
+  message(sprintf("[inner_diameter debug] inner_diameter    = %s", inner_diameter))
+  
+  message(sprintf("[bed_depth debug] calculated_depth    = %s", calculated_depth))
+  message(sprintf("[bed_depth debug] final_depth    = %s", final_depth))
+  
+  #===bed depth debug end===#
   return(final_depth)
 }
 

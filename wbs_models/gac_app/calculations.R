@@ -441,31 +441,44 @@ calculate_gac_system <- function(params) {
     # bed depth loaded from Google Sheets, which must not bleed into basin calculations.
     params$bed_depth <- params$basin_depth
     message(paste("Basin design: bed_depth set to basin_depth =", params$bed_depth, "ft"))
-  } else if (is_missing(params$bed_depth) || use_autosize) {
-    # Pressure vessel AutoSize — derive bed_depth from vessel geometry
-    message("Running AutoSize to calculate bed depth...")
-    message(paste("  Inputs: flow =", design_flow_mgd, "MGD, ebct =", ebct_minutes,
-                  "min, num_trains =", params$num_trains, ", diameter =", params$vessel_diameter, "ft"))
-
+  # } else if (is_missing(params$bed_depth) || use_autosize) {
+  #   # Pressure vessel AutoSize — derive bed_depth from vessel geometry
+  #   message("Running AutoSize to calculate bed depth...")
+  #   message(paste("  Inputs: flow =", design_flow_mgd, "MGD, ebct =", ebct_minutes,
+  #                 "min, num_trains =", params$num_trains, ", diameter =", params$vessel_diameter, "ft"))
     # AutoSize: bed_depth = volume_per_vessel_cf / cross_section_area
     # volume_per_vessel_cf = design_flow_gpm * ebct / 7.48 / num_trains
     # cross_section_area (upright) = pi * (diameter/2)^2
     # cross_section_area (horizontal) = diameter * height_length
-    {
-      design_flow_gpm_as <- design_flow_mgd * 1e6 / 1440
-      vol_per_vessel_cf  <- design_flow_gpm_as * ebct_minutes / 7.48 /
-                              max(1, as.numeric(params$num_trains))
-      geom <- tolower(params$tank_geometry)
-      diam <- as.numeric(params$vessel_diameter)
-      if (geom == "horizontal") {
-        ht   <- as.numeric(params$vessel_height_length)
-        xsa  <- diam * ht
-      } else {
-        xsa  <- pi * (diam / 2)^2
-      }
-      params$bed_depth <- if (xsa > 0) max(2, vol_per_vessel_cf / xsa) else 3.5
-    }
-    message(paste("AutoSize calculated bed depth:", round(params$bed_depth, 2), "feet"))
+    # {
+    #   design_flow_gpm_as <- design_flow_mgd * 1e6 / 1440
+    #   vol_per_vessel_cf  <- design_flow_gpm_as * ebct_minutes / 7.48 /
+    #                           max(1, as.numeric(params$num_trains))
+    #   geom <- tolower(params$tank_geometry)
+    #   diam <- as.numeric(params$vessel_diameter)
+    #   if (geom == "horizontal") {
+    #     ht   <- as.numeric(params$vessel_height_length)
+    #     xsa  <- diam * ht
+    #   } else {
+    #     xsa  <- pi * (diam / 2)^2
+    #   }
+    #   params$bed_depth <- if (xsa > 0) max(2, vol_per_vessel_cf / xsa) else 3.5
+    # }
+
+    } else if (is_missing(params$bed_depth) || use_autosize) {
+  message("Running AutoSize to calculate bed depth...")
+  message(paste("  Inputs: flow =", design_flow_mgd, "MGD, ebct =", ebct_minutes,
+                "min, num_trains =", params$num_trains, ", diameter =", params$vessel_diameter, "ft"))
+
+  params$bed_depth <- calculate_autosize_bed_depth(
+    design_flow_mgd          = design_flow_mgd,
+    ebct_minutes             = ebct_minutes,
+    num_trains               = as.numeric(params$num_trains),
+    num_contactors_in_series = as.numeric(get_value(params$num_tanks, 1)),
+    tank_geometry            = tolower(params$tank_geometry),
+    vessel_diameter          = as.numeric(params$vessel_diameter)
+  )
+  message(paste("AutoSize calculated bed depth:", round(params$bed_depth, 2), "feet"))
   } else {
     params$bed_depth <- as.numeric(params$bed_depth)
   }
@@ -571,7 +584,10 @@ calculate_gac_system <- function(params) {
     GAC_each        = contactor_results$gac_volume_per_contactor,
     GAC_density     = params$GAC_density      %||% 30,
     makeup_rate     = params$makeup_rate      %||% 0.10,
-    makeup_rate_off = params$makeup_rate_off  %||% 0.30
+    makeup_rate_off = params$makeup_rate_off  %||% 0.30,
+    # needed by options 2 and 3 to derive D, v, M
+    bed_depth       = contactor_results$bed_depth,    
+    basin_op_depth  = contactor_results$basin_depth 
   )
   
   # Calculate pump requirements
@@ -878,7 +894,13 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
       (design_flow * 1e6 / 1440) * ebct / 7.48
     }
   }
-  
+    # === TEMP DEBUG: geometry inputs at gac_volume_per_contactor ===
+  message(sprintf("[contactor debug] geometry    = %s", geometry))
+  message(sprintf("[contactor debug] diameter    = %.10f ft  (= %.6f inches)", diameter, diameter * 12))
+  message(sprintf("[contactor debug] bed_depth   = %.10f ft", bed_depth))
+  message(sprintf("[contactor debug] gac_vol_exp = %.10f cf", pi * (diameter/2)^2 * bed_depth))
+  # === END TEMP DEBUG ===
+
   # Calculate GAC volume (based on bed depth / basin operating depth)
   # Workbook: media_volume = comm_SA*bed_depth (pressure) or basin_w*basin_l*basin_op_depth (basin)
   # basin_op_depth is the GAC media depth inside the basin = basin_depth parameter
@@ -1065,6 +1087,8 @@ calculate_gac_requirements <- function(
   # Freundlich/BDST inputs (types 2,3 only)
   M = NULL, C_0 = NULL, C_b = NULL, QL = NULL,
   N_0_e = NULL, v = NULL, D = NULL,
+  bed_depth      = NULL,    # ft — pressure vessel bed depth 
+  basin_op_depth = NULL,    # ft — gravity basin GAC depth 
   # Regeneration parameters
   makeup_rate     = 0.10,                # fraction of annual throughput as new GAC (on-site regen)
   makeup_rate_off = 0.30,                # fraction as new GAC (off-site regen)
@@ -1124,6 +1148,97 @@ calculate_gac_requirements <- function(
   #   Freundlich throughput, BDST, BV/EBCT method)
   # average_flow_rate in workbook = average_flow_MGD * 1e6 / (24*60)  [GPM]
   average_flow_rate_gpm <- average_flow * 1e6 / (24 * 60)
+
+
+  # === TEMP DEBUG: bed_life option 4 inputs — remove after diagnosis ===
+  message(sprintf("[bed_life] freund_type        = %s", freund_type))
+  message(sprintf("[bed_life] freund_1           = %s", freund_1))
+  message(sprintf("[bed_life] media_volume       = %s", media_volume))
+  message(sprintf("[bed_life] num_treat_lines    = %s", num_treat_lines))
+  message(sprintf("[bed_life] Num_tanks          = %s", Num_tanks))
+  message(sprintf("[bed_life] BV_definition      = %s", BV_definition))
+  message(sprintf("[bed_life] average_flow_rate_gpm = %s", average_flow_rate_gpm))
+  message(sprintf("[bed_life] design_type        = %s", design_type))
+  message(sprintf("[bed_life] op_num_basins      = %s", op_num_basins))
+  if (!is.null(media_volume) && !is.null(num_treat_lines)) {
+    .mv   <- suppressWarnings(as.numeric(media_volume))
+    .ntl  <- suppressWarnings(as.numeric(num_treat_lines))
+    .nt   <- suppressWarnings(as.numeric(Num_tanks %||% 1))
+    .mult <- if (!is.null(BV_definition) && BV_definition == "EBCT per vessel") 1 else .nt
+    .exp  <- freund_1 * .mv * .ntl * .mult * 7.48 / average_flow_rate_gpm / 60 / 24 / 30
+    message(sprintf("[bed_life] EXPECTED result   = %.6f months", .exp))
+  }
+  # === END TEMP DEBUG ===
+
+  # ensure no silent NA is returned for other feund type selections (resulting in 4 as fallback)
+  if (is.character(freund_type) && !suppressWarnings(!is.na(as.numeric(freund_type)))) {
+  freund_type <- dplyr::case_when(
+    grepl("months",     freund_type, ignore.case = TRUE) ~ 1L,
+    grepl("Freundlich", freund_type, ignore.case = TRUE) ~ 2L,
+    grepl("BDST",       freund_type, ignore.case = TRUE) ~ 3L,
+    TRUE ~ 4L
+  )
+} else {
+  freund_type <- as.integer(freund_type)
+}
+  
+  # ── Derive Freundlich / BDST intermediate variables (options 2 and 3 only) ────
+  # Workbook computes M, QL, N_0_e, D, v as named ranges from design parameters.
+  # R must derive them here since calculate_gac_system does not pre-compute them.
+  if (freund_type %in% c(2L, 3L)) {
+    # C_0 / C_b: use influent_conc and effluent_target already in scope
+    if (is.null(C_0) || is.na(suppressWarnings(as.numeric(C_0))))
+      C_0 <- suppressWarnings(as.numeric(influent_conc))
+    if (is.null(C_b) || is.na(suppressWarnings(as.numeric(C_b))))
+      C_b <- suppressWarnings(as.numeric(effluent_target))
+
+    # QL: workbook = average_flow_rate * 3.785 (gpm → L/min)
+    if (is.null(QL) || is.na(suppressWarnings(as.numeric(QL))))
+      QL <- average_flow_rate_gpm * 3.785
+
+    # M: workbook = IF(design_type=1, GAC_each * num_treat_lines, GAC) * 453.59  (lbs → grams)
+    if (is.null(M) || is.na(suppressWarnings(as.numeric(M)))) {
+      gac_lbs <- if (design_type == 2) {
+        suppressWarnings(as.numeric(media_volume)) *
+          suppressWarnings(as.numeric(op_num_basins)) *
+          GAC_density
+      } else {
+        suppressWarnings(as.numeric(media_volume)) *
+          suppressWarnings(as.numeric(num_treat_lines)) *
+          GAC_density
+      }
+      M <- gac_lbs * 453.59
+    }
+
+    # D: workbook = IF(design_type=1, bed_depth, basin_op_depth) * 0.3048  (ft → m)
+    if (is.null(D) || is.na(suppressWarnings(as.numeric(D)))) {
+      depth_ft <- if (design_type == 2)
+        suppressWarnings(as.numeric(basin_op_depth))
+      else
+        suppressWarnings(as.numeric(bed_depth))
+      D <- depth_ft * 0.3048
+    }
+
+    # v: workbook = QL*0.001 / (contact_area_m2 * num_lines)
+    # contact_area = media_volume / bed_depth  (workbook: media_volume = comm_SA * bed_depth)
+    if (is.null(v) || is.na(suppressWarnings(as.numeric(v)))) {
+      depth_ft_v <- if (design_type == 2)
+        suppressWarnings(as.numeric(basin_op_depth))
+      else
+        suppressWarnings(as.numeric(bed_depth))
+      contact_area_ft2 <- suppressWarnings(as.numeric(media_volume)) / depth_ft_v
+      contact_area_m2  <- contact_area_ft2 * 0.0929
+      n_lines <- if (design_type == 2)
+        suppressWarnings(as.numeric(op_num_basins))
+      else
+        suppressWarnings(as.numeric(num_treat_lines))
+      v <- (QL * 0.001) / (contact_area_m2 * n_lines)
+    }
+
+    # N_0_e: workbook = freund_1 * GAC_density * 453.59 / 0.02832
+    if (is.null(N_0_e) || is.na(suppressWarnings(as.numeric(N_0_e))))
+      N_0_e <- freund_1 * GAC_density * 453.59 / 0.02832
+  }
 
   bed_life_months <- calculate_gac_bed_life(
     freund_type     = freund_type,
@@ -1326,7 +1441,7 @@ calculate_gac_bed_life <- function(freund_type, freund_1, freund_2,
       D <- as.numeric(D)
       
       term1 <- N_0_e / (1000 * v * C_0) * D
-      term2 <- log(C_0 / C_b - 1) / (freund_2 * C_0)
+      term2 <- log10(C_0 / C_b - 1) / (freund_2 * C_0)
       
       # Convert to months
       (term1 - term2) / (30 * 24 * 60)

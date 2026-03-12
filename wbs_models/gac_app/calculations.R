@@ -317,59 +317,218 @@ calculate_gac_system <- function(params) {
     }
   }
   
+  # if (need_to_calculate_trains) {
+    
+  #   # Estimate bed_depth for initial num_trains calculation
+  #   estimated_bed_depth <- if (!is_missing(params$bed_depth)) {
+  #     as.numeric(params$bed_depth)
+  #   # } else {
+  #   #   # Typical values based on geometry
+  #   #   if (params$tank_geometry == "basin") 5.0 else 3.5
+  #   # }
+  #   } else if (params$tank_geometry == "basin") {
+  #     5.0
+  #   } else {
+  #     if (design_flow_mgd <= 0.1) 4.0 else 7.0
+  #   }  
+    
+  #   message("=== AUTO-CALCULATING NUM_TRAINS ===")
+    
+  #   # Ensure design_flow_mgd is numeric for sprintf
+  #   flow_for_display <- tryCatch(as.numeric(design_flow_mgd), error = function(e) 0)
+  #   ebct_for_display <- tryCatch(as.numeric(ebct_minutes), error = function(e) 0)
+    
+  #   message(sprintf("  Design flow: %.3f MGD", flow_for_display))
+  #   message(sprintf("  EBCT: %.2f minutes", ebct_for_display))
+  #   message(sprintf("  Using estimated bed_depth: %.2f ft", estimated_bed_depth))
+    
+  #   # Ensure numeric conversion for calculation
+  #   design_flow_numeric <- as.numeric(design_flow_mgd)
+  #   ebct_numeric <- as.numeric(ebct_minutes)
+    
+  #   params$num_trains <- calculate_num_trains(
+  #     design_flow = design_flow_numeric,
+  #     ebct = ebct_numeric,
+  #     bed_depth = estimated_bed_depth,
+  #     vessel_diameter = params$vessel_diameter,
+  #     vessel_height_length = params$vessel_height_length,
+  #     tank_geometry = params$tank_geometry,
+  #     design_type = if (params$tank_geometry == "basin") 2 else 1,
+  #     num_contactors_in_series = 1,
+  #     vessel_thickness = 0
+  #   )
+    
+  #   # Handle basin case (returns NA)
+  #   if (is.na(params$num_trains)) {
+  #     params$num_trains <- 1
+  #   }
+    
+  #   message(sprintf("  Calculated num_trains: %d", params$num_trains))
+    
+  #   } else {
+  #   params$num_trains <- as.numeric(params$num_trains)
+  #   message(sprintf("Using user-specified num_trains: %d", params$num_trains))
+  # }
+  
   if (need_to_calculate_trains) {
-    
-    # Estimate bed_depth for initial num_trains calculation
-    estimated_bed_depth <- if (!is_missing(params$bed_depth)) {
-      as.numeric(params$bed_depth)
-    # } else {
-    #   # Typical values based on geometry
-    #   if (params$tank_geometry == "basin") 5.0 else 3.5
-    # }
-    } else if (params$tank_geometry == "basin") {
-      5.0
-    } else {
-      if (design_flow_mgd <= 0.1) 4.0 else 7.0
-    }  
-    
-    message("=== AUTO-CALCULATING NUM_TRAINS ===")
-    
-    # Ensure design_flow_mgd is numeric for sprintf
+
+    message("=== AUTO-CALCULATING NUM_TRAINS (iterative AutoSize) ===")
     flow_for_display <- tryCatch(as.numeric(design_flow_mgd), error = function(e) 0)
     ebct_for_display <- tryCatch(as.numeric(ebct_minutes), error = function(e) 0)
-    
-    message(sprintf("  Design flow: %.3f MGD", flow_for_display))
+    message(sprintf("  Design flow: %.3f MGD (%.2f gpm)", flow_for_display, flow_for_display * 1e6 / 1440))
     message(sprintf("  EBCT: %.2f minutes", ebct_for_display))
-    message(sprintf("  Using estimated bed_depth: %.2f ft", estimated_bed_depth))
-    
-    # Ensure numeric conversion for calculation
-    design_flow_numeric <- as.numeric(design_flow_mgd)
-    ebct_numeric <- as.numeric(ebct_minutes)
-    
-    params$num_trains <- calculate_num_trains(
-      design_flow = design_flow_numeric,
-      ebct = ebct_numeric,
-      bed_depth = estimated_bed_depth,
-      vessel_diameter = params$vessel_diameter,
-      vessel_height_length = params$vessel_height_length,
-      tank_geometry = params$tank_geometry,
-      design_type = if (params$tank_geometry == "basin") 2 else 1,
-      num_contactors_in_series = 1,
-      vessel_thickness = 0
-    )
-    
-    # Handle basin case (returns NA)
-    if (is.na(params$num_trains)) {
-      params$num_trains <- 1
-    }
-    
-    message(sprintf("  Calculated num_trains: %d", params$num_trains))
-    
+
+    if (tolower(params$tank_geometry) == "basin") {
+      # Basin num_trains always 1 — sized by basin dimensions, not vessel iteration
+      params$num_trains <- 1L
+
     } else {
+      # Pressure vessel iterative AutoSize — mirrors workbook macro
+      # Iterates candidate num_lines, derives geometry per n, evaluates total capital cost
+      # including redundancy, picks the minimum-cost feasible design.
+      # Continues comp_nlines_extra_search=5 steps past the current minimum before stopping.
+      df_gpm     <- as.numeric(design_flow_mgd) * 1e6 / 1440
+      ebct_num   <- as.numeric(ebct_minutes)
+      num_series <- as.numeric(get_value(params$num_tanks, 1))  # contactors in series
+      comp_vol   <- df_gpm * ebct_num / 7.481          # C18: total required media volume (ft³)
+
+      # Target bed depth for initial diameter sizing (comp_sa = comp_vol / target_bd):
+      #   Matches workbook VBA behavior, verified against AutoSize output:
+      #     <= 0.1 MGD          -> 4 ft (target_bed_depth_under, matches C23)
+      #     > 0.1 and < 1 MGD  -> 6 ft (target_bed_depth_under_g, mid-range)
+      #     >= 1.0 MGD          -> 7 ft (target_bed_depth_over, matches C23)
+      flow_num  <- as.numeric(design_flow_mgd)
+      target_bd <- if (flow_num <= 0.1) 4.0 else if (flow_num < 1.0) 6.0 else 7.0
+
+      # Upright vessel constraints from CDAs
+      min_diam <- 1.5;  max_diam <- 5.0
+      min_bd   <- 2.0;  max_bd   <- 8.5
+
+      # Diameter-dependent max straight height from vessel_size_table_cl
+      # (Engineering Data sheet A230:C252, used as C83 in AutoSize; C85 = MIN(C83, C84))
+      vessel_max_h <- c(
+        "1.5" =  6.0, "2"   =  7.5, "2.5" =  9.0, "3"   = 10.0,
+        "3.5" = 10.0, "4"   = 12.0, "4.5" = 15.0, "5"   = 15.0
+      )
+      max_height_cda <- 14.0  # C84: CDA max_height for upright vessels
+
+      # Redundancy per workbook C34 formula:
+      #   flow < 1 MGD: n==1 → NRD_small_1=1, n>1 → NRD_small=0
+      #   flow ≥ 1 MGD: NRD = ROUNDUP(n / redund_freq, 0)
+      nrd_small_1 <- 1L
+      nrd_small   <- 0L
+      redund_freq <- 4L
+
+      # Cost proxy (matches workbook VBA cost evaluation):
+      #   fg_pv_eq (fiberglass polynomial) when vessel volume ≤ 901 gal
+      #   cs_pv_eq (carbon steel power law) when vessel volume > 901 gal
+      # Height for volume uses CLAMPED (unrounded) bed depth per workbook C62:
+      #   raw_h = (1 + bed_expansion) * clamped_bd + freeboard
+      cs_a          <- 1596.499     # Cost Equations F8
+      cs_b          <- 0.459        # Cost Equations G8
+      fg_m          <- 0.002235492  # fg_pv_eq M10 (quadratic)
+      fg_n_coef     <- 18.79231828  # fg_pv_eq N10 (linear)
+      fg_o          <- 275.543722419# fg_pv_eq O10 (constant)
+      fg_max_vol    <- 901.0        # fg_pv_eq upper limit (gal); above = cs equation
+      bed_expansion <- 0.5          # CDA bed_expansion
+      freeboard     <- 0.5          # CDA free_board
+
+      extra_search <- 5L   # comp_nlines_extra_search
+
+      best_cost  <- Inf
+      best_n     <- 1L
+      best_d     <- min_diam
+      best_bd    <- min_bd
+      best_h     <- 6.0
+      steps_past <- 0L
+
+      for (n_try in seq_len(60)) {
+        comp_sa_n  <- comp_vol / target_bd / n_try             # comp_sa per vessel
+        raw_d      <- sqrt(4 * comp_sa_n / pi)                 # C58
+        clamped_d  <- max(min_diam, min(max_diam, raw_d))
+        actual_d   <- round(clamped_d * 2) / 2                 # nearest 0.5 ft
+
+        # Diameter-dependent max height (C83 VLOOKUP, C85 = MIN(C83, C84))
+        d_key   <- as.character(actual_d)
+        max_h_d <- if (d_key %in% names(vessel_max_h)) vessel_max_h[[d_key]] else max_height_cda
+        max_h   <- min(max_h_d, max_height_cda)
+
+        sa_one     <- pi * (actual_d / 2)^2                    # C59
+        raw_bd     <- comp_vol / num_series / (sa_one * n_try) # C61
+        clamped_bd <- max(min_bd, min(max_bd, raw_bd))
+        actual_bd  <- ceiling(clamped_bd * 10) / 10            # ROUNDUP to 1 decimal
+
+        # Height uses ACTUAL ROUNDED bed depth (verified: matches workbook output)
+        raw_h    <- (1 + bed_expansion) * actual_bd + freeboard
+        actual_h <- ceiling(raw_h * 2) / 2                     # ROUNDUP to 0.5 ft
+
+        # Skip candidates that exceed diameter-specific max height
+        if (actual_h > max_h) {
+          message(sprintf("  n=%d: diam=%.1fft, h=%.1fft > max_h=%.1fft [skip]",
+                          n_try, actual_d, actual_h, max_h))
+          next
+        }
+
+        flow_cap <- sa_one * actual_bd * 7.48 / (ebct_num / num_series) * n_try
+        feasible <- (flow_cap >= df_gpm) && (actual_bd <= max_bd)
+
+        if (feasible) {
+          # NRD per workbook C34
+          if (flow_num >= 1.0) {
+            nrd <- as.integer(ceiling(n_try / redund_freq))
+          } else {
+            nrd <- if (n_try == 1L) nrd_small_1 else nrd_small
+          }
+          n_total <- n_try + nrd
+
+          # Cost: fg equation ≤ 901 gal, cs power law above
+          vol_gal <- pi * (actual_d / 2)^2 * actual_h * 7.48
+          if (vol_gal <= fg_max_vol) {
+            cost_per <- fg_m * vol_gal^2 + fg_n_coef * vol_gal + fg_o
+          } else {
+            cost_per <- cs_a * vol_gal^cs_b
+          }
+          tot_cost <- cost_per * n_total
+
+          message(sprintf("  n=%d: diam=%.1fft, bd=%.1fft, h=%.1fft, vol=%.0fgal, n_total=%d, cost=%.0f%s",
+                          n_try, actual_d, actual_bd, actual_h, vol_gal, n_total, tot_cost,
+                          if (tot_cost < best_cost) " *best*" else ""))
+
+          if (tot_cost < best_cost) {
+            best_cost  <- tot_cost
+            best_n     <- as.integer(n_try)
+            best_d     <- actual_d
+            best_bd    <- actual_bd
+            best_h     <- actual_h
+            steps_past <- 0L
+          } else {
+            steps_past <- steps_past + 1L
+            if (steps_past >= extra_search) break
+          }
+        } else {
+          message(sprintf("  n=%d: diam=%.1fft, bd=%.1fft, cap=%.1f < %.1f gpm [infeasible]",
+                          n_try, actual_d, actual_bd, flow_cap, df_gpm))
+        }
+      }
+
+      if (is.finite(best_cost)) {
+        params$num_trains           <- best_n
+        params$vessel_diameter      <- best_d
+        params$bed_depth            <- best_bd
+        params$vessel_height_length <- best_h
+        message(sprintf("  --> AutoSize selected: n=%d, diam=%.1fft, bd=%.1fft, h=%.1fft (cost=%.0f)",
+                        best_n, best_d, best_bd, best_h, best_cost))
+      } else {
+        message("  AutoSize: no feasible upright solution found — defaulting to n=1")
+        params$num_trains <- 1L
+      }
+    }
+
+  } else {
     params$num_trains <- as.numeric(params$num_trains)
     message(sprintf("Using user-specified num_trains: %d", params$num_trains))
   }
-  
+
   # Ensure at least 1 train
   params$num_trains <- max(1, as.integer(params$num_trains))
   
@@ -465,7 +624,7 @@ calculate_gac_system <- function(params) {
     #   params$bed_depth <- if (xsa > 0) max(2, vol_per_vessel_cf / xsa) else 3.5
     # }
 
-    } else if (is_missing(params$bed_depth) || use_autosize) {
+    } else if ((is_missing(params$bed_depth) || use_autosize) && need_to_calculate_trains == FALSE) {
   message("Running AutoSize to calculate bed depth...")
   message(paste("  Inputs: flow =", design_flow_mgd, "MGD, ebct =", ebct_minutes,
                 "min, num_trains =", params$num_trains, ", diameter =", params$vessel_diameter, "ft"))

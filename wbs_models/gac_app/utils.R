@@ -349,7 +349,7 @@ calculate_target_bed_depth <- function(design_flow_mgd, tank_geometry = "upright
   if (tank_geometry == "horizontal") {
     return(target_bed_depth_horiz)
   } else {
-    if (design_flow_mgd <= 0.1) {
+    if (design_flow_mgd <= 1) {
       return(target_bed_depth_under)
     } else {
       return(target_bed_depth_over)

@@ -15,18 +15,31 @@ outputDbUI <- function(id) {
         
         # Summary boxes
         fluidRow(
-          column(3,
+          column(2,
             valueBoxOutput(ns("total_capital_summary"), width = NULL)
           ),
-          column(3,
+          column(1,
+            h4("+")
+           ),
+          column(2,
             valueBoxOutput(ns("total_indirect_summary"), width = NULL)
           ),
-          column(3,
+          column(1,
+            h4("+")
+           ),
+          column(2,
+            valueBoxOutput(ns("total_add_on"), width = NULL)
+           ),
+          column(1,
+            h4("=")
+           ),
+          column(2,
             valueBoxOutput(ns("total_project_summary"), width = NULL)
-          ),
-          column(3,
-            valueBoxOutput(ns("annualized_om_summary"), width = NULL)
           )
+          # ,
+          # column(3,
+          #   valueBoxOutput(ns("annualized_om_summary"), width = NULL)
+          # )
         )
       )
     ),
@@ -51,61 +64,7 @@ outputDbUI <- function(id) {
           DTOutput(ns("test_table"))
         ),
         br(),
-        
-        # # Direct Capital Cost Details Section
-        # h4("Direct Capital Cost Details", 
-        #    style = "color: #3c8dbc; border-bottom: 2px solid #3c8dbc; padding-bottom: 5px;"),
-        
-        # # GAC Contactors
-        # h4("GAC Contactors", style = "margin-left: 20px; color: #666;"),
-        # DTOutput(ns("contactors_table")),
-        # br(),
-        
-        # # Tanks
-        # h4("Tanks", style = "margin-left: 20px; color: #666;"),
-        # DTOutput(ns("tanks_table")),
-        # br(),
-        
-        # # Piping
-        # h4("Piping", style = "margin-left: 20px; color: #666;"),
-        # DTOutput(ns("piping_table")),
-        # br(),
-        
-        # # Valves
-        # h4("Valves", style = "margin-left: 20px; color: #666;"),
-        # DTOutput(ns("valves_table")),
-        # br(),
-        
-        # # Flow Meters
-        # h4("Flow Meters", style = "margin-left: 20px; color: #666;"),
-        # DTOutput(ns("flowmeters_table")),
-        # br(),
-        
-        # # Pumps
-        # h4("Pumps", style = "margin-left: 20px; color: #666;"),
-        # DTOutput(ns("pumps_table")),
-        # br(),
-        
-        # # GAC Media
-        # h4("GAC Media", style = "margin-left: 20px; color: #666;"),
-        # DTOutput(ns("gac_media_table")),
-        # br(),
-        
-        # # Instrumentation & Controls
-        # h4("Instrumentation & Controls", style = "margin-left: 20px; color: #666;"),
-        # DTOutput(ns("controls_table")),
-        # br(),
-        
-        # # Buildings
-        # h4("Buildings", style = "margin-left: 20px; color: #666;"),
-        # DTOutput(ns("buildings_table")),
-        # br(),
-        
-        # # Site Work
-        # h4("Site Work", style = "margin-left: 20px; color: #666;"),
-        # DTOutput(ns("sitework_table")),
-        # br(),
-        
+          
         # Total Direct Capital Cost
         h4("Total Direct Capital Cost", 
            style = "color: #3c8dbc; border-bottom: 2px solid #3c8dbc; padding-bottom: 5px;"),
@@ -198,23 +157,6 @@ outputDbServer <- function(id, results) {
     }
     
     # Value Boxes
-    output$total_rows_box <- renderValueBox({
-      req(output_db())
-      
-      # Count number of line items across all categories
-      num_items <- 0
-      if (!is.null(output_db()$capital_costs$breakdown)) {
-        num_items <- nrow(output_db()$capital_costs$breakdown)
-      }
-      
-      valueBox(
-        value = num_items,
-        subtitle = "Cost Line Items",
-        icon = icon("list"),
-        color = "blue"
-      )
-    })
-    
     output$total_capital_summary <- renderValueBox({
       req(output_db())
       
@@ -250,6 +192,23 @@ outputDbServer <- function(id, results) {
     })
     
 
+    output$total_add_on <- renderValueBox({
+      req(output_db())
+      
+      value <- if (!is.null(output_db()$capital_costs$addon_cost)) {
+        scales::dollar(output_db()$capital_costs$addon_cost)
+      } else {
+        "N/A"
+      }
+      
+      valueBox(
+        value = value,
+        subtitle = "Add-on Cost",
+        icon = icon("dollar-sign"),
+        color = "teal"
+      )
+    })
+
     output$total_project_summary <- renderValueBox({
       req(output_db())
       
@@ -263,7 +222,7 @@ outputDbServer <- function(id, results) {
         value = value,
         subtitle = "Grand Total Capital Cost",
         icon = icon("money-bill-wave"),
-        color = "teal"
+        color = "green"
       )
     })
     
@@ -284,70 +243,6 @@ outputDbServer <- function(id, results) {
       )
     })
     
-    # output$test_table <- renderDT({
-      
-    #   req(output_db())
-      
-    #   browser()
-
-    #   # Get all the data components
-    #   params <- output_db()$inputs
-    #   contactors <- output_db()$contactors
-    #   tanks <- output_db()$tanks
-    #   piping <- output_db()$piping
-    #   pumps <- output_db()$pumps
-    #   gac <- output_db()$gac
-    #   controls <- output_db()$controls
-    #   site <- output_db()$site
-    #   costs <- output_db()$capital_costs
-
-      
-    #   baseline_selection <- get_sheet_data("baseline_priority_selection",return_type = "table") 
-
-    #   size_selection <- controls$system_scale
-    #   cost_selection <- stringr::str_to_lower(contactors$component_level_name)
-
-    #   wbs_selection <- baseline_selection |>
-    #     dplyr::filter(
-    #       grepl(size_selection , size, ignore.case = TRUE)
-    #     ) |>
-    #     dplyr::mutate(num_row = dplyr::row_number()) |>
-    #     dplyr::filter(
-    #       !!rlang::sym(cost_selection) == 1
-    #     )
-
-    #   df <- get_sheet_data("Sheet23",return_type = "table") 
-    #   names(df)<-stringr::str_to_title(sub("_"," ",names(df)))
-
-    #   df <- df |>
-    #     dplyr::mutate(
-    #       num_row = dplyr::row_number()
-    #     ) |>
-    #     dplyr::filter(num_row %in% wbs_selection$num_row)|>
-    #     dplyr::rename(
-    #       WBS = Wbs,
-    #       table = Table
-    #     ) 
-
-    
-    #   # Determine which vessel type based on material and geometry
-    #   contactor_type <- ifelse(params$design_type == "Pressure", "Pressure", "Contact")
-      
-    #   df<- df |>
-    #     dplyr::mutate(
-    #       Use = dplyr::case_when(
-    #         grepl("GAC Contactor", table) & grepl(contactor_type, table) ~ TRUE, 
-    #         .default = FALSE
-    #       )
-    #     ) |>
-    #     dplyr::filter(Use == TRUE)
-     
-
-    #   formatted_table <- format_wbs_table(df)
-    #   formatted_table
-
-    # })
-
     
     # build_wbs_table now returns list(dt, sections).
     # Cache with a reactive so Google Sheets is only hit once per calculation.

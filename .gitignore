@@ -18,3 +18,4 @@ vba_translation_guide.json
 wbs_models/modules/WBSCompSelect.R
 wbs_models/resources/importing.R
 wbs_models/modules/WBSCompSelect.R
+wbs_models/gac_app/rsconnect/shinyapps.io/epic-tech/gac_app.dcf

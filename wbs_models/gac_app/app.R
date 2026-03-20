@@ -6,7 +6,7 @@ library(shinyjs)
 library(tidyverse)
 
 
-#setwd("wbs_models/gac_app/") # for deployment
+setwd("wbs_models/gac_app/") # for deployment
 
 # Source modules
 source("mod_inputs.R")
@@ -180,11 +180,18 @@ ui <- dashboardPage(
           min-height: calc(100vh - 44px) !important;
         }
         /* ensure footer clears the sidebar */
+        /* ── Sidebar-open: footer clears the sidebar ── */
         @media (min-width: 768px) {
-          .app-footer {
-            left: 300px !important;
-            width: calc(100% - 300px) !important;
+          body:not(.sidebar-collapse) .app-footer {
+            left: 300px !important;          
+            width: calc(100% - 230px) !important;
           }
+        }
+
+        /* ── Sidebar-collapsed: footer goes full width ── */
+        body.sidebar-collapse .app-footer {
+          left: 0 !important;
+          width: 100% !important;
         }
       "))
     ),

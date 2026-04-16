@@ -140,10 +140,16 @@ format_wbs_table <- function(wbs_data) {
 # Get standard inputs as a named list
 get_standard_inputs <- function(contam_selection, design_type_idx, design_number) {
   URL <- "https://docs.google.com/spreadsheets/d/1usWl2SuplV5IAXYgnzUvs4KmaLImTeZdTFDE4OXHpH0/"
-  
-  standard_inputs <- data.frame(googlesheets4::read_sheet(URL, sheet = "standard_inputs")) |>
-    janitor::clean_names()
-  
+
+  # Use startup cache when available; fall back to live read otherwise
+  cache <- getOption("gac.sheet_cache")
+  if (!is.null(cache) && !is.null(cache[["standard_inputs"]])) {
+    standard_inputs <- cache[["standard_inputs"]]
+  } else {
+    standard_inputs <- data.frame(googlesheets4::read_sheet(URL, sheet = "standard_inputs")) |>
+      janitor::clean_names()
+  }
+
   # Filter to get the matching row (before converting to character)
   matching_row <- standard_inputs |>
     dplyr::filter(
@@ -234,14 +240,37 @@ get_standard_inputs <- function(contam_selection, design_type_idx, design_number
   )
 }
 
+# ── Sheet cache ──────────────────────────────────────────────────────────────
+# .gac_sheet_cache is populated at startup by load_gac_sheet_cache() in app.R.
+# get_sheet_data() reads from it; if the cache is empty (e.g. in testing) it
+# falls back to a live read so behaviour is unchanged outside the app.
+
+load_gac_sheet_cache <- function() {
+  URL <- "https://docs.google.com/spreadsheets/d/1usWl2SuplV5IAXYgnzUvs4KmaLImTeZdTFDE4OXHpH0/"
+  sheets <- c("contam_type", "design_type", "design_number", "standard_inputs")
+
+  cache <- lapply(stats::setNames(sheets, sheets), function(s) {
+    message("  caching sheet: ", s)
+    data.frame(googlesheets4::read_sheet(URL, sheet = s)) |>
+      janitor::clean_names()
+  })
+
+  options(gac.sheet_cache = cache)
+  invisible(cache)
+}
+
 get_sheet_data <- function(sheet_name, return_type = "vector", column = "name") {
   URL <- "https://docs.google.com/spreadsheets/d/1usWl2SuplV5IAXYgnzUvs4KmaLImTeZdTFDE4OXHpH0/"
 
-  data <- data.frame(googlesheets4::read_sheet(URL, sheet = sheet_name))
-  
-  data <- data |>
-    janitor::clean_names()
-  
+  # Use startup cache when available; fall back to live read otherwise
+  cache <- getOption("gac.sheet_cache")
+  if (!is.null(cache) && !is.null(cache[[sheet_name]])) {
+    data <- cache[[sheet_name]]
+  } else {
+    data <- data.frame(googlesheets4::read_sheet(URL, sheet = sheet_name)) |>
+      janitor::clean_names()
+  }
+
   if (return_type == "vector") {
     return(dplyr::pull(data, !!column))
   } else if (return_type == "table") {
@@ -264,6 +293,28 @@ get_design_number <- function(return_type = "vector") {
   get_sheet_data("design_number", return_type)
 }
 
+
+
+### critical_design_assumptions_sheet------
+
+
+
+load_critical_design_assumptions_sheet_cache <- function(){
+  URL <- "https://docs.google.com/spreadsheets/d/1usWl2SuplV5IAXYgnzUvs4KmaLImTeZdTFDE4OXHpH0/"
+  sheets <- c("critical_design_assumptions")
+
+  cache <- lapply(stats::setNames(sheets, sheets), function(s) {
+    message("  caching sheet: ", s)
+    data.frame(googlesheets4::read_sheet(URL, sheet = s)) |>
+      janitor::clean_names()
+  })
+
+  options(critical.assumptions_cache = cache)
+  invisible(cache)
+}
+
+
+#### flow rates ----
 #' Convert flow rates between units
 #' @param flow Numeric flow rate value
 #' @param from Character string of input units (MGD, gpm, cfs)
@@ -909,3 +960,31 @@ get_cost_factors <- function() {
     disposal_cost_per_lb = 1.50
   )
 }
+
+
+
+
+# ============================================================
+# Pipe diameter lookup - mirrors Excel VLOOKUP on
+# pipe_size_table_cl (Engineering Data rows 130-150)
+# ============================================================
+lookup_pipe_diameter <- function(flow_gpm) {
+  # pipe_size_table_cl: flow breakpoints -> diameter (inches)
+  # Row format: flows >= breakpoint get that diameter
+  pipe_size_table <- data.frame(
+    min_flow = c(0,    2.1,  4.1,  7.1,  21.1, 41.1, 66.1,
+                 116.1, 238.1, 697.1, 1435.1, 2608.1,
+                 4132.1, 5299.1, 7528.1, 10265.1, 13643.1,
+                 22174.1, 50561.1, 81777.1, 122025.1),
+    diameter  = c(0.5,  0.75, 1,    1.5,  2,    2.5,  3,
+                  4,    6,    8,    10,    12,
+                  14,   16,   18,   20,    24,
+                  30,   36,   42,   48)
+  )
+  # VLOOKUP approximate match: largest breakpoint <= flow_gpm
+  flow_gpm <- as.numeric(flow_gpm)
+  if (is.na(flow_gpm) || flow_gpm < 0) flow_gpm <- 0
+  idx <- max(which(pipe_size_table$min_flow <= flow_gpm))
+  pipe_size_table$diameter[idx]
+}
+

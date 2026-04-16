@@ -1,49 +1,74 @@
-# # WBSCompSelect.bas module analysis; 324 lines 
-# This module looks at worksheet "OUTPUT"
-#ss_cat2 from HVAC sheet, $B$5
-#component_level from Instrumentation and Control, $B$5
-# Purpose: 
+# WBSCompSelect.bas module translation (324 lines) 
+# Original Code Intro -----
+# CompSelect.bas: Component Selection module, based on the component selection
+# ' algorithm in cu-life.
+# '
+# ' The CompSelect macro is the entry point to all of this code.  It uses the
+# ' appropriate priority lookup column for the component level and system size
+# ' category to fill in the entries for the Use column.  Possible entries for
+# ' Use include the following (defined in constants, below):
+# '   "" - (blank) No component or zero quantity on this row
+# '    1 - use this component
+# '    0 - don't use this component
+# '    x - no component was available for this WBS; cu-life should issue a
+# '        "contact vendor" error
+# '   ec - Excel error in the cost for this component; cu-life should issue
+# '        the corresponding error
+# '   ep - Excel error in the priority lookup for this component; cu-life should'
+# '        issue the corresponding error
+# ' The only numeric entries are 1 and 0, so that we can use the SUMPRODUCT
+# ' worksheet function to compute the total direct cost of the system.
+
+
+# Purpose ----
 # Selects the best component from alternatives based on priority and cost, filling a "Use" column with values indicating whether each component should be used.
  
-# Key Logic:
+# Key Logic ----
 # Determines priority lookup column based on system size and component level
 # Groups components by WBS (Work Breakdown Structure) number
 # For each WBS group, selects the component with the lowest priority number that has a valid cost
 # Marks selected components with 1, rejected with 0, or error codes
 
-# Data Flow:
-# Reads from "OUTPUT" worksheet range "output_db"
-# Uses named ranges: "ss_cat2" (system size), "component_level"
+# Data Flow ----
+# Reads from "OUTPUT" worksheet range "output_db", OUTPUT!A38:V320
+# Uses named ranges: 
+# - "ss_cat2" (system size), from HVAC sheet, $B$5
+# - "component_level", from Instrumentation and Control, $B$5
 
 # Priority columns start at column 14, organized by size (small/mid/large) and level (lo/mid/hi)
-
-# Component Selection Module - R Translation
 # Translated from VBA WBSCompSelect module
 
-# Key Changes in Translation
-
-# Data Structure: R uses data frames instead of Excel ranges/variants
-# Indexing: R is 1-based like VBA, making translation straightforward
-# Error Handling: Excel error checking adapted to handle NA values and error strings
-# Function Style: More functional/vectorized approach where appropriate
-
-# Usage Notes
-# Input Data Structure: Your data frame should have columns at these positions:
-
+# Input Data Structure ----
+# The data frame should have columns at these positions:
 # Column 1: WBS number
 # Column 3: Quantity
 # Column 10: Total Cost
 # Column 14+: Priority columns (9 total: 3 sizes × 3 levels)
+# This is the Direct Capital Cost Details Table (see OUTPUT!A35:V314, this table extends to the AH column, but from N-V it showcases the resulting priority selection
 
-# Key Functions:
-
+# Key Functions -----
 # comp_select() - Main entry point
+
 # get_pri_lookup_col() - Determines which priority column to use
+# It looks at the system size and component level (as set in the
+# ranges ss_cat2 and component_level) to determine which priority lookup column
+# we should use for component selection.  It is called once at the beginning of
+# CompSelect.  It returns the column number within the range output_db.  If
+# there is some problem with the size or component level (not impossible, since
+# component_level is a user input) it brings up an error dialog and returns 0.
+
+
 # get_component_row() - Selects best component from a WBS group
+# It looks at the set of component rows in output_db, between
+# FirstRow and LastRow (inclusive).  It uses the priorities in PriColumn and
+# the total costs to determine which component should be chosen.  It returns
+# its results through entries in the Use() variant, which are suitable to be
+# dropped into rngUse above.
+
 # Helper functions handle safe type conversion
 
 
-# Constants
+# Constants -----
 USE_YES <- 1
 USE_NO <- 0
 USE_UNAVAIL <- "x"
@@ -128,7 +153,31 @@ comp_select <- function(output_data, system_size, component_level) {
 #' @param size_cat System size category (1=small, 2=mid, 3=large)
 #' @param comp_level Component level (0=lo, 1=mid, 2=hi)
 #' @return Column index for priority lookup
-get_pri_lookup_col <- function(size_cat, comp_level) {
+get_pri_lookup_col <- function(design_flow_I, comp_level) {
+
+  # # design_flow value (MGD) is in Constractor Contraints sheet, $C$6
+  # # it depends on 
+  # # df_unit, INPUT sheet, $H$29 (dropdown menu, user input)
+  # # bp_pct, Critical Design Assumptions sheet, $C$58
+  # # design_flow_I, INPUT sheet, $G$29 (user input)
+
+  # this value could theoretically be a user input, but we are using default vals for the MVP
+  bp_pct <- get_critical_design_assumptions_data() |>
+    dplyr::filter(range_name == "bp_pct") |>
+    dplyr::pull(value)
+  
+  design_flow_MGD <- dplyr::case_when(
+    df_units == "gpm" ~ (1-bp_pct)*design_flow_I*24*60/1000000,
+    .default = (1-bp_pct)*design_flow_I
+  )
+  
+  # # size_cat corresponds to ss_cat2 in HVAC sheet, $B$5, 
+  # # it's value is in HVAC!C5 and it's dependent on design_flow range
+  ss_cat2 <- dplyr::case_when(
+    design_flow_MGD < 1 ~ 1, #small
+    design_flow_MGD < 10 ~ 2, #medium
+    .default = 3 #large
+  )
   
   # Find base column for system size
   pri_col <- switch(
@@ -152,7 +201,14 @@ get_pri_lookup_col <- function(size_cat, comp_level) {
 #' @param first_row First row of WBS group
 #' @param last_row Last row of WBS group
 #' @return Updated data frame with Use column filled for this group
-get_component_row <- function(output_data, pri_column, first_row, last_row) {
+get_component_row <- function(output_data, retrofit_I, pri_column, first_row, last_row) {
+
+#   ' GetComponentRow looks at the set of component rows in output_db, between
+# ' FirstRow and LastRow (inclusive).  It uses the priorities in PriColumn and
+# ' the total costs to determine which component should be chosen.  It returns
+# ' its results through entries in the Use() variant, which are suitable to be
+# ' dropped into rngUse above.
+  
   
   rows <- first_row:last_row
   n_rows <- length(rows)
@@ -281,32 +337,6 @@ safe_numeric_detailed <- function(x) {
   return(result)
 }
 
-#' Example Usage
-#'
-#' Demonstrates how to use the component selection functions
-example_usage <- function() {
-  # Create sample data
-  sample_data <- data.frame(
-    WBS = c("1.1", "1.1", "1.1", "2.1", "2.1"),
-    Component = c("CompA", "CompB", "CompC", "CompD", "CompE"),
-    Qty = c(1, 1, 1, 2, 2),
-    TotalCost = c(100, 150, 120, 200, 180),
-    Pri_Small_Lo = c(1, 2, 3, 1, 2),
-    Pri_Small_Mid = c(2, 1, 3, 2, 1),
-    Pri_Small_Hi = c(3, 1, 2, 1, 2)
-  )
-  
-  # Adjust column indices if needed
-  # Run component selection
-  result <- comp_select(
-    output_data = sample_data,
-    system_size = 1,      # Small
-    component_level = 0   # Lo
-  )
-  
-  print(result)
-  return(result)
-}
 
-# Run example
-# example_usage()
+
+

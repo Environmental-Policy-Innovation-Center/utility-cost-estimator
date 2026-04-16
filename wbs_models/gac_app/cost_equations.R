@@ -147,11 +147,16 @@ calculate_equipment_cost <- function(Q, coeffs, min_range = NULL, max_range = NU
 #' Get cost coefficients for a specific equipment type
 #' @param equation_key Equipment equation key (e.g., "ss_pv_eq")
 #' @param component_level Component quality level (1=low, 2=mid, 3=high)
+#' @param coeff_table   Pre-loaded coefficient data frame. If NULL, falls back to
+#'                      load_cost_coefficients() — but this triggers a Google Sheets
+#'                      read, so always pass the cached table from app startup.
 #' @return List with coefficients and validity ranges
-get_equipment_coefficients <- function(equation_key, component_level = 1) {
+get_equipment_coefficients <- function(equation_key, component_level = 1, coeff_table = NULL) {
   
-  # Load coefficient table
-  coeff_table <- load_cost_coefficients()
+  # Use pre-loaded table if provided; otherwise fall back to loading (slow path)
+  if (is.null(coeff_table)) {
+    coeff_table <- load_cost_coefficients()
+  }
   
   # Find the equipment row
   equipment_row <- coeff_table[coeff_table$Equation.Lookup.Name == equation_key, ]
@@ -188,9 +193,11 @@ get_equipment_coefficients <- function(equation_key, component_level = 1) {
 #' @param material Material type ("SS", "CS", "CSP", "FG")
 #' @param quantity Number of vessels
 #' @param component_level Quality level (1-3)
+#' @param coeff_table     Pre-loaded coefficient table (from app startup cache).
+#'                        Defaults to getOption("gac.coeff_table") set at startup.
 #' @return Total cost for all vessels
 calculate_pressure_vessel_cost <- function(volume_gal, material = "CS", 
-                                          quantity = 1, component_level = 1) {
+                                          quantity = 1, component_level = 1, coeff_table = getOption("gac.coeff_table")) {
   
   message(sprintf("  [PV Cost Function] Input: %.2f gal, material=%s, qty=%d", 
                   volume_gal, material, quantity))
@@ -208,9 +215,22 @@ calculate_pressure_vessel_cost <- function(volume_gal, material = "CS",
   message(sprintf("  [PV Cost Function] Using equation: %s", equation_key))
   
   # Get coefficients
-  coeffs <- get_equipment_coefficients(equation_key, component_level)
-  
-  message(sprintf("  [PV Cost Function] C8=%.6f, C9=%.6f, C10=%.6f", 
+  coeffs <- get_equipment_coefficients(equation_key, component_level, coeff_table)
+
+  # ss_pv_eq in CSV has wrong (cs_pv_eq) coefficients.
+  # Workbook Cost Equations r7: L=4e-8, M=-0.001652243, N=26.487, O=28673.43
+  if (equation_key == "ss_pv_eq") {
+    coeffs$C1 <- 0; coeffs$C2 <- 0; coeffs$C3 <- 0; coeffs$C4 <- 0
+    coeffs$C5 <- 0; coeffs$C6 <- 0
+    coeffs$C7  <- 4e-08
+    coeffs$C8  <- -0.001652243
+    coeffs$C9  <- 26.487093706
+    coeffs$C10 <- 28673.43064482
+    coeffs$max_range <- 27101
+    coeffs$min_range <- 0
+  }
+
+  message(sprintf("  [PV Cost Function] C8=%.6f, C9=%.6f, C10=%.6f",
                   coeffs$C8, coeffs$C9, coeffs$C10))
   
   # Calculate unit cost
@@ -221,9 +241,27 @@ calculate_pressure_vessel_cost <- function(volume_gal, material = "CS",
     max_range = coeffs$max_range
   )
   
-  message(sprintf("  [PV Cost Function] Unit cost: $%.2f, Total: $%.2f", 
-                  unit_cost, unit_cost * quantity))
-  
+  # fg_pv_eq max = 901 gal.
+  # Workbook CE formula: IF(OR(D > max_range, D < min_range), "contact vendor", polynomial)
+  # When "contact vendor", CompSelect skips FG and selects the next priority material.
+  # Priority table (Small_Low): FG=1, CSP=2, CS=3, SS=4
+  # So FG out-of-range → CompSelect uses CSP (csp_pv_eq, max_range=27101 gal).
+  # This correctly prices up large-vessel candidates in the AutoSize search:
+  # e.g. for 0.305 MGD n=1 (2606 gal) and n=2 (1309 gal) get CSP cost, making n=4
+  # the true minimum on direct cost — matching the workbook result.
+  if (is.na(unit_cost) && equation_key == "fg_pv_eq") {
+    message(sprintf("  [PV Cost] fg_pv_eq out of range (%.0f gal > 901) — cascading to CSP (CompSelect priority 2)",
+                    volume_gal))
+    csp_coeffs <- get_equipment_coefficients("csp_pv_eq", component_level, coeff_table)
+    unit_cost  <- calculate_equipment_cost(
+      Q = volume_gal, coeffs = csp_coeffs,
+      min_range = csp_coeffs$min_range, max_range = csp_coeffs$max_range
+    )
+  }
+
+  message(sprintf("  [PV Cost Function] Unit cost: $%.2f",
+                  if (is.na(unit_cost)) -1 else unit_cost))
+
   # Return total cost
   if (is.na(unit_cost)) {
     return(list(
@@ -232,7 +270,7 @@ calculate_pressure_vessel_cost <- function(volume_gal, material = "CS",
       message = "Contact vendor - outside valid range"
     ))
   }
-  
+
   return(list(
     unit_cost = unit_cost,
     total_cost = unit_cost * quantity,
@@ -245,9 +283,11 @@ calculate_pressure_vessel_cost <- function(volume_gal, material = "CS",
 #' @param tank_type Type of tank ("backwash_steel", "backwash_fg", "holding_steel", etc.)
 #' @param quantity Number of tanks
 #' @param component_level Quality level (1-3)
+#' @param coeff_table     Pre-loaded coefficient table (from app startup cache).
+#'                        Defaults to getOption("gac.coeff_table") set at startup.
 #' @return Total cost for all tanks
 calculate_tank_cost <- function(volume_gal, tank_type = "backwash_steel",
-                               quantity = 1, component_level = 1) {
+                               quantity = 1, component_level = 1, coeff_table = getOption("gac.coeff_table")) {
   
   # Determine equation key based on tank type
   equation_key <- switch(
@@ -262,8 +302,8 @@ calculate_tank_cost <- function(volume_gal, tank_type = "backwash_steel",
   )
   
   # Get coefficients
-  coeffs <- get_equipment_coefficients(equation_key, component_level)
-  
+  coeffs <- get_equipment_coefficients(equation_key, component_level, coeff_table)
+
   # Calculate unit cost
   unit_cost <- calculate_equipment_cost(
     Q = volume_gal,
@@ -291,11 +331,13 @@ calculate_tank_cost <- function(volume_gal, tank_type = "backwash_steel",
 #' Calculate basin internals cost
 #' @param area_sf Basin surface area in square feet
 #' @param component_level Quality level (1-3)
+#' @param coeff_table     Pre-loaded coefficient table (from app startup cache).
+#'                        Defaults to getOption("gac.coeff_table") set at startup.
 #' @return Cost for basin internals
-calculate_basin_internals_cost <- function(area_sf, component_level = 2) {
+calculate_basin_internals_cost <- function(area_sf, component_level = 2, coeff_table = getOption("gac.coeff_table")) {
   
   # Underdrain system
-  coeffs_underdrain <- get_equipment_coefficients("cont_bot_eq", component_level)
+  coeffs_underdrain <- get_equipment_coefficients("cont_bot_eq", component_level, coeff_table)
   cost_underdrain <- calculate_equipment_cost(
     Q = area_sf,
     coeffs = coeffs_underdrain,
@@ -313,8 +355,10 @@ calculate_basin_internals_cost <- function(area_sf, component_level = 2) {
 #' @param diameter Pipe diameter in inches
 #' @param material Pipe material ("DI", "CPVC", "PVC", "SS", "ST")
 #' @param component_level Quality level (1-3)
+#' @param coeff_table     Pre-loaded coefficient table (from app startup cache).
+#'                        Defaults to getOption("gac.coeff_table") set at startup.
 #' @return Cost per linear foot
-calculate_pipe_cost_per_lf <- function(diameter, material = "PVC", component_level = 2) {
+calculate_pipe_cost_per_lf <- function(diameter, material = "PVC", component_level = 2, coeff_table = getOption("gac.coeff_table")) {
   
   # Determine equation key based on material
   equation_key <- switch(
@@ -329,8 +373,13 @@ calculate_pipe_cost_per_lf <- function(diameter, material = "PVC", component_lev
   )
   
   # Get coefficients
-  coeffs <- get_equipment_coefficients(equation_key, component_level)
-  
+  coeffs <- get_equipment_coefficients(equation_key, component_level, coeff_table)
+
+  # PVC pipe equations: workbook O-col = 1.428 $/LF constant; CSV has C10=0
+  if (grepl("^pvc_pipe_eq", equation_key)) {
+    coeffs$C10 <- 1.428
+  }
+
   # Calculate cost per linear foot
   cost_per_lf <- calculate_equipment_cost(
     Q = diameter,
@@ -347,8 +396,10 @@ calculate_pipe_cost_per_lf <- function(diameter, material = "PVC", component_lev
 #' @param length Total length in linear feet
 #' @param material Pipe material
 #' @param component_level Quality level (1-3)
+#' @param coeff_table     Pre-loaded coefficient table (from app startup cache).
+#'                        Defaults to getOption("gac.coeff_table") set at startup.
 #' @return Total piping cost
-calculate_piping_cost <- function(diameter, length, material = "PVC", component_level = 2) {
+calculate_piping_cost <- function(diameter, length, material = "PVC", component_level = 2, coeff_table = getOption("gac.coeff_table")) {
   
   # Get cost per foot from Excel equations
   cost_per_lf <- calculate_pipe_cost_per_lf(diameter, material, component_level)
@@ -371,9 +422,11 @@ calculate_piping_cost <- function(diameter, length, material = "PVC", component_
 #' @param valve_type Type of valve ("MOV", "BFV", "CHV")
 #' @param material Valve material ("PP", "SS", "CI")
 #' @param component_level Quality level (1-3)
+#' @param coeff_table     Pre-loaded coefficient table (from app startup cache).
+#'                        Defaults to getOption("gac.coeff_table") set at startup.
 #' @return Valve unit cost
 calculate_valve_cost <- function(valve_size, valve_type = "MOV", 
-                                material = "CI", component_level = 2) {
+                                material = "CI", component_level = 2, coeff_table = getOption("gac.coeff_table")) {
   
   # Determine equation key based on type and material
   # For MOV (Motor Operated Valve)
@@ -420,8 +473,8 @@ calculate_valve_cost <- function(valve_size, valve_type = "MOV",
   }
   
   # Get coefficients
-  coeffs <- get_equipment_coefficients(equation_key, component_level)
-  
+  coeffs <- get_equipment_coefficients(equation_key, component_level, coeff_table)
+
   # Calculate unit cost
   unit_cost <- calculate_equipment_cost(
     Q = valve_size,
@@ -468,8 +521,10 @@ calculate_system_valve_costs <- function(num_contactors, num_trains,
                                         #  res_pipe_diam = 2,
                                         #  res_pumps = 0, 
                                         #  res_hold_tanks = 0,
-                                         res_pipe_diam = back_pipe_diam
-                                        ) {
+                                         res_pipe_diam = back_pipe_diam,
+                                         num_contactors_in_series = 1   # Num_tanks: 1=parallel, >1=series
+                                        ,
+                                         coeff_table = getOption("gac.coeff_table")) {
 
   # Mirrors Instrumentation and Control sheet + valve_table (CDA rows 267-290)
   # Workbook WBS 4.1.x = MOVs, 4.2.x = Manual valves, 4.3.x = Check valves
@@ -509,7 +564,10 @@ calculate_system_valve_costs <- function(num_contactors, num_trains,
   #              proc_MOV_vessel_ser = 3 (fully-auto, series)
   #              proc_MOV_pump       = 2 (fully-auto, per booster pump)
   #              all = 0 for manual/semi-auto
-  vessels_in_series   <- (num_trains > 1) && ((num_contactors / max(1, num_trains)) > 1)
+  # Workbook IC row 16: proc_MOV_vessel = VLOOKUP(IF(Num_tanks=1,"proc_mov_vessel_par","proc_mov_vessel_ser"),...)
+  # Num_tanks = num_contactors_in_series: 1=parallel (PAR=2), >1=series (SER=3)
+  # The old heuristic (num_contactors/num_trains > 1) incorrectly fires when NRD>0.
+  vessels_in_series   <- as.numeric(num_contactors_in_series) > 1
   proc_mov_per_vessel <- if (fully_auto) (if (vessels_in_series) 3L else 2L) else 0L
   proc_mov_per_pump   <- if (fully_auto) 2L else 0L
 

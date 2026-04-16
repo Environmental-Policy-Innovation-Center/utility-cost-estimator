@@ -233,7 +233,7 @@ calculate_gac_system <- function(params) {
   params$influent_conc <- as.numeric(get_value(params$influent_conc, 100))
   params$effluent_target <- as.numeric(get_value(params$effluent_target, 10))
   params$num_trains <- as.numeric(get_value(params$num_trains, NA))
-  params$redundancy <- as.numeric(get_value(params$redundancy, 0))  # Default: no redundancy
+  params$redundancy <- suppressWarnings(as.numeric(get_value(params$redundancy, NA)))  # NA = not user-specified; NRD derived from workbook formula below
   
   # EBCT must be set before AutoSize - ensure it's numeric
   ebct_minutes <- as.numeric(get_value(params$ebct, 7.5))
@@ -288,7 +288,8 @@ calculate_gac_system <- function(params) {
   
   # Helper function to safely check if a value is missing or empty
   is_missing <- function(x) {
-    is.null(x) || length(x) == 0 || is.na(x) || (is.character(x) && nchar(trimws(x)) == 0)
+    is.null(x) || length(x) == 0 || is.na(x) ||
+      (is.character(x) && (nchar(trimws(x)) == 0 || trimws(x) == "NA"))
   }
   
   # Set defaults for vessel dimensions BEFORE AutoSize (needed for accurate calculation)
@@ -317,59 +318,6 @@ calculate_gac_system <- function(params) {
     }
   }
   
-  # if (need_to_calculate_trains) {
-    
-  #   # Estimate bed_depth for initial num_trains calculation
-  #   estimated_bed_depth <- if (!is_missing(params$bed_depth)) {
-  #     as.numeric(params$bed_depth)
-  #   # } else {
-  #   #   # Typical values based on geometry
-  #   #   if (params$tank_geometry == "basin") 5.0 else 3.5
-  #   # }
-  #   } else if (params$tank_geometry == "basin") {
-  #     5.0
-  #   } else {
-  #     if (design_flow_mgd <= 0.1) 4.0 else 7.0
-  #   }  
-    
-  #   message("=== AUTO-CALCULATING NUM_TRAINS ===")
-    
-  #   # Ensure design_flow_mgd is numeric for sprintf
-  #   flow_for_display <- tryCatch(as.numeric(design_flow_mgd), error = function(e) 0)
-  #   ebct_for_display <- tryCatch(as.numeric(ebct_minutes), error = function(e) 0)
-    
-  #   message(sprintf("  Design flow: %.3f MGD", flow_for_display))
-  #   message(sprintf("  EBCT: %.2f minutes", ebct_for_display))
-  #   message(sprintf("  Using estimated bed_depth: %.2f ft", estimated_bed_depth))
-    
-  #   # Ensure numeric conversion for calculation
-  #   design_flow_numeric <- as.numeric(design_flow_mgd)
-  #   ebct_numeric <- as.numeric(ebct_minutes)
-    
-  #   params$num_trains <- calculate_num_trains(
-  #     design_flow = design_flow_numeric,
-  #     ebct = ebct_numeric,
-  #     bed_depth = estimated_bed_depth,
-  #     vessel_diameter = params$vessel_diameter,
-  #     vessel_height_length = params$vessel_height_length,
-  #     tank_geometry = params$tank_geometry,
-  #     design_type = if (params$tank_geometry == "basin") 2 else 1,
-  #     num_contactors_in_series = 1,
-  #     vessel_thickness = 0
-  #   )
-    
-  #   # Handle basin case (returns NA)
-  #   if (is.na(params$num_trains)) {
-  #     params$num_trains <- 1
-  #   }
-    
-  #   message(sprintf("  Calculated num_trains: %d", params$num_trains))
-    
-  #   } else {
-  #   params$num_trains <- as.numeric(params$num_trains)
-  #   message(sprintf("Using user-specified num_trains: %d", params$num_trains))
-  # }
-  
   if (need_to_calculate_trains) {
 
     message("=== AUTO-CALCULATING NUM_TRAINS (iterative AutoSize) ===")
@@ -379,148 +327,816 @@ calculate_gac_system <- function(params) {
     message(sprintf("  EBCT: %.2f minutes", ebct_for_display))
 
     if (tolower(params$tank_geometry) == "basin") {
-      # Basin num_trains always 1 — sized by basin dimensions, not vessel iteration
-      params$num_trains <- 1L
+      # Gravity basin iterative AutoSize — faithfully mirrors workbook VBA (AutoSize_OptA).
+      #
+      # The VBA minimises annualized_cost = -PMT(r, n, system_cost) + OM_cost over
+      # candidate n values using extra_search = 5 (AutoSize!C151).
+      # We replicate this by calling the full WBS for each candidate n, computing:
+      #   system_cost = compile_capital_costs(...)$total_project
+      #   annualized  = system_cost × CRF + calculate_om_costs(...)$total_annual
+      #
+      # KEY: facil_length and total_fp are computed per-n and passed explicitly so
+      # sitework, yard piping, land and building costs scale with basin layout.
 
-    } else {
-      # Pressure vessel iterative AutoSize — mirrors workbook macro
-      # Iterates candidate num_lines, derives geometry per n, evaluates total capital cost
-      # including redundancy, picks the minimum-cost feasible design.
-      # Continues comp_nlines_extra_search=5 steps past the current minimum before stopping.
-      df_gpm     <- as.numeric(design_flow_mgd) * 1e6 / 1440
-      ebct_num   <- as.numeric(ebct_minutes)
-      num_series <- as.numeric(get_value(params$num_tanks, 1))  # contactors in series
-      comp_vol   <- df_gpm * ebct_num / 7.481          # C18: total required media volume (ft³)
-
-      # Target bed depth for initial diameter sizing (comp_sa = comp_vol / target_bd):
-      #   Matches workbook VBA behavior, verified against AutoSize output:
-      #     <= 0.1 MGD          -> 4 ft (target_bed_depth_under, matches C23)
-      #     > 0.1 and < 1 MGD  -> 6 ft (target_bed_depth_under_g, mid-range)
-      #     >= 1.0 MGD          -> 7 ft (target_bed_depth_over, matches C23)
+      df_gpm    <- as.numeric(design_flow_mgd) * 1e6 / 1440
+      ebct_num  <- as.numeric(ebct_minutes)
+      comp_vol  <- df_gpm * ebct_num / 7.481
       flow_num  <- as.numeric(design_flow_mgd)
-      target_bd <- if (flow_num <= 0.1) 4.0 else if (flow_num < 1.0) 6.0 else 7.0
 
-      # Upright vessel constraints from CDAs
-      min_diam <- 1.5;  max_diam <- 5.0
-      min_bd   <- 2.0;  max_bd   <- 8.5
+      target_bd_g  <- if (flow_num <= 1) 6.0 else 8.0
+      min_length_g <- 6.0;  max_length_g <- 30.0
+      min_bd_g     <- 3.0;  max_bd_g     <- 10.0
+      load_max_g   <- 10.0; load_min_g   <- 0.5
 
-      # Diameter-dependent max straight height from vessel_size_table_cl
-      # (Engineering Data sheet A230:C252, used as C83 in AutoSize; C85 = MIN(C83, C84))
-      vessel_max_h <- c(
-        "1.5" =  6.0, "2"   =  7.5, "2.5" =  9.0, "3"   = 10.0,
-        "3.5" = 10.0, "4"   = 12.0, "4.5" = 15.0, "5"   = 15.0
-      )
-      max_height_cda <- 14.0  # C84: CDA max_height for upright vessels
+      r_disc <- 0.07;  ul_yrs <- 16.1
+      crf_g  <- r_disc * (1 + r_disc)^ul_yrs / ((1 + r_disc)^ul_yrs - 1)
 
-      # Redundancy per workbook C34 formula:
-      #   flow < 1 MGD: n==1 → NRD_small_1=1, n>1 → NRD_small=0
-      #   flow ≥ 1 MGD: NRD = ROUNDUP(n / redund_freq, 0)
-      nrd_small_1 <- 1L
-      nrd_small   <- 0L
-      redund_freq <- 4L
+      # ── Nested helper: full WBS cost for one candidate (n_try, lw_try, bd_try) ──
+      calc_ann_for_n <- function(n_try, lw_try, bd_try) {
+        tryCatch(suppressMessages({
 
-      # Cost proxy (matches workbook VBA cost evaluation):
-      #   fg_pv_eq (fiberglass polynomial) when vessel volume ≤ 901 gal
-      #   cs_pv_eq (carbon steel power law) when vessel volume > 901 gal
-      # Height for volume uses CLAMPED (unrounded) bed depth per workbook C62:
-      #   raw_h = (1 + bed_expansion) * clamped_bd + freeboard
-      cs_a          <- 1596.499     # Cost Equations F8
-      cs_b          <- 0.459        # Cost Equations G8
-      fg_m          <- 0.002235492  # fg_pv_eq M10 (quadratic)
-      fg_n_coef     <- 18.79231828  # fg_pv_eq N10 (linear)
-      fg_o          <- 275.543722419# fg_pv_eq O10 (constant)
-      fg_max_vol    <- 901.0        # fg_pv_eq upper limit (gal); above = cs equation
-      bed_expansion <- 0.5          # CDA bed_expansion
-      freeboard     <- 0.5          # CDA free_board
+          p <- params
+          p$num_trains   <- as.integer(n_try)
+          p$basin_width  <- lw_try
+          p$basin_length <- lw_try
+          p$basin_depth  <- bd_try
+          p$bed_depth    <- bd_try
+          p$use_autosize_a <- "no"
 
-      extra_search <- 5L   # comp_nlines_extra_search
+          # defaults
+          p$service_pumps      <- as.numeric(get_value(p$service_pumps,      0))
+          p$backwash_pumps     <- as.numeric(get_value(p$backwash_pumps,     0))
+          p$residuals_pumps    <- as.numeric(get_value(p$residuals_pumps,    0))
+          p$no_backwash        <- as.numeric(get_value(p$no_backwash,        0))
+          p$no_backwash_tank   <- get_value(p$no_backwash_tank,   FALSE)
+          p$backwash_interval  <- as.numeric(get_value(p$backwash_interval,  168))
+          p$residuals_disposal <- get_value(p$residuals_disposal, "POTW")
+          p$residuals_tank     <- get_value(p$residuals_tank,     "no holding tank")
+          p$automation_level   <- get_value(p$automation_level,   "fully automated")
+          p$manual_override    <- get_value(p$manual_override,    FALSE)
+          p$include_buildings  <- get_value(p$include_buildings,  TRUE)
+          p$include_hvac       <- get_value(p$include_hvac,       FALSE)
+          p$include_land       <- get_value(p$include_land,       TRUE)
+          p$include_permits    <- get_value(p$include_permits,    TRUE)
+          p$include_pilot      <- get_value(p$include_pilot,      TRUE)
+          p$retrofit           <- get_value(p$retrofit,           FALSE)
+          p$regen_type         <- get_value(p$regen_type, "regeneration off-site (non-hazardous)")
+          p$backwash_frequency <- as.numeric(get_value(p$backwash_frequency, 52))
 
-      best_cost  <- Inf
-      best_n     <- 1L
-      best_d     <- min_diam
-      best_bd    <- min_bd
-      best_h     <- 6.0
-      steps_past <- 0L
+          # basin counts
+          design_flow_gpm_c <- design_flow_mgd * 1e6 / 1440
+          min_basin_vol_c   <- design_flow_gpm_c * ebct_num / 7.48
+          op_num_c  <- ceiling(min_basin_vol_c / (lw_try * lw_try * bd_try))
+          ss_cat2_c <- if (design_flow_mgd < 1) 1L else if (design_flow_mgd < 10) 2L else 3L
+          nrd_i_c   <- suppressWarnings(as.numeric(p$redundancy))
+          nrd_c     <- if (!is.na(nrd_i_c) && !is.null(p$redundancy) &&
+                             !is.na(p$redundancy) && p$redundancy != "") {
+            as.integer(nrd_i_c)
+          } else if (op_num_c == 1L) { 1L
+          } else { c(0L, 1L, 2L)[ss_cat2_c] }
+          total_num_c <- op_num_c + nrd_c
 
-      for (n_try in seq_len(60)) {
-        comp_sa_n  <- comp_vol / target_bd / n_try             # comp_sa per vessel
-        raw_d      <- sqrt(4 * comp_sa_n / pi)                 # C58
-        clamped_d  <- max(min_diam, min(max_diam, raw_d))
-        actual_d   <- round(clamped_d * 2) / 2                 # nearest 0.5 ft
+          # basin footprint and facility length for this n
+          t_thick <- 1.0
+          basin_fp_c <- (total_num_c * lw_try + (total_num_c + 1L) * t_thick) *
+                        (lw_try + 2 * t_thick)
+          facil_len_c <- ceiling(sqrt(basin_fp_c) / 10) * 10
 
-        # Diameter-dependent max height (C83 VLOOKUP, C85 = MIN(C83, C84))
-        d_key   <- as.character(actual_d)
-        max_h_d <- if (d_key %in% names(vessel_max_h)) vessel_max_h[[d_key]] else max_height_cda
-        max_h   <- min(max_h_d, max_height_cda)
+          # contactors
+          con_r <- calculate_contactors(
+            design_flow = design_flow_mgd, ebct = ebct_num,
+            geometry = p$tank_geometry, num_trains = as.integer(n_try),
+            num_contactors_in_series = as.numeric(get_value(p$num_contactors_in_series, 1)),
+            redundancy = p$redundancy, bed_depth = bd_try,
+            diameter = p$vessel_diameter, height_length = p$vessel_height_length,
+            basin_length = lw_try, basin_width = lw_try, basin_depth = bd_try
+          )
 
-        sa_one     <- pi * (actual_d / 2)^2                    # C59
-        raw_bd     <- comp_vol / num_series / (sa_one * n_try) # C61
-        clamped_bd <- max(min_bd, min(max_bd, raw_bd))
-        actual_bd  <- ceiling(clamped_bd * 10) / 10            # ROUNDUP to 1 decimal
+          # GAC requirements
+          gac_r <- calculate_gac_requirements(
+            total_volume = con_r$gac_volume_per_contactor * as.integer(n_try),
+            influent_conc = p$influent_conc,
+            effluent_target = p$effluent_target, average_flow = average_flow_mgd,
+            regen_type = p$regen_type, freund_type = p$freund_type %||% 4,
+            freund_1 = p$freund_1 %||% 66600, freund_2 = p$freund_2 %||% NULL,
+            design_type = 2L, media_volume = con_r$gac_volume_per_contactor,
+            num_treat_lines = as.integer(n_try),
+            BV_definition = p$BV_definition %||% "EBCT per vessel",
+            Num_tanks = p$num_contactors_in_series %||% 1, op_num_basins = op_num_c,
+            bed_depth = bd_try, basin_op_depth = bd_try
+          )
 
-        # Height uses ACTUAL ROUNDED bed depth (verified: matches workbook output)
-        raw_h    <- (1 + bed_expansion) * actual_bd + freeboard
-        actual_h <- ceiling(raw_h * 2) / 2                     # ROUNDUP to 0.5 ft
+          # pumps
+          pmp_r <- calculate_pumps(
+            design_flow = design_flow_mgd, num_trains = as.integer(n_try),
+            service_pumps = p$service_pumps, backwash_pumps = p$backwash_pumps,
+            residuals_pumps = p$residuals_pumps, tank_geometry = p$tank_geometry,
+            no_backwash = p$no_backwash, ss_cat2 = p$ss_cat2 %||% ss_cat2_c,
+            water_flush_gpm = round(12 * lw_try * lw_try, 0)
+          )
 
-        # Skip candidates that exceed diameter-specific max height
-        if (actual_h > max_h) {
-          message(sprintf("  n=%d: diam=%.1fft, h=%.1fft > max_h=%.1fft [skip]",
-                          n_try, actual_d, actual_h, max_h))
+          # tanks
+          tnk_r <- calculate_tanks(
+            design_flow = design_flow_mgd, no_backwash = p$no_backwash,
+            no_backwash_tank = p$no_backwash_tank, backwash_interval = p$backwash_interval,
+            residuals_disposal = p$residuals_disposal, residuals_tank = p$residuals_tank,
+            num_contactors = con_r$total_contactors, component_level = 1,
+            vessel_sa = lw_try * lw_try   # comm_SA = basin_width * basin_length for gravity
+          )
+
+          # piping — pass explicit facil_length so pipe lengths scale with basin layout
+          pip_r <- calculate_piping_valves(
+            num_contactors = con_r$total_contactors, num_trains = as.integer(n_try),
+            automation_level = p$automation_level, design_flow_mgd = design_flow_mgd,
+            component_level = 1, no_backwash = p$no_backwash,
+            facil_length = facil_len_c,               # ← per-n facility length
+            vessel_diameter = p$vessel_diameter, vessel_length = p$vessel_height_length,
+            tank_geometry = p$tank_geometry, params = p, tanks = tnk_r,
+            backwash_pumps = pmp_r$backwash_pumps %||% 0,
+            num_back_tanks = tnk_r$num_back_tanks %||% 0,
+            num_booster_pumps = pmp_r$booster_pumps %||% 0
+          )
+
+          # controls
+          ctl_r <- calculate_controls(
+            automation_level = p$automation_level, num_contactors = con_r$total_contactors,
+            num_trains = as.integer(n_try), manual_override = p$manual_override,
+            ss_cat2 = p$ss_cat2 %||% ss_cat2_c, design_type = p$design_type %||% 2,
+            add_on = p$add_on %||% 0, num_back_tanks = tnk_r$num_back_tanks %||% 0,
+            res_holding = p$res_holding %||% "none",
+            num_res_tanks = tnk_r$num_residuals_tanks %||% 0,
+            num_res_basins = tnk_r$num_residuals_basins %||% 0,
+            bp_pct = p$bp_pct %||% 0,
+            in_out_pipe_diam = pip_r$in_out_pipe_diam %||% 1.5,
+            proc_pipe_diam = pip_r$proc_pipe_diam %||% 1.5,
+            back_pipe_diam = pip_r$back_pipe_diam %||% 2.0,
+            res_pipe_diam = pip_r$res_pipe_diam %||% 2.0,
+            tot_MOVs = pip_r$mov_quantity %||% 0,
+            fm_lkp_io = p$fm_lkp_io %||% "flow_prop",
+            fm_lkp_proc = p$fm_lkp_proc %||% "flow_mag",
+            fm_lkp_back = p$fm_lkp_back %||% "flow_prop",
+            fm_lkp_res = p$fm_lkp_res %||% "flow_prop",
+            Operator_LOE = p$Operator_LOE %||% 40.607,
+            booster_pumps = pmp_r$booster_pumps %||% 0,
+            backwash_pumps = pmp_r$backwash_pumps %||% 0,
+            res_pumps = pmp_r$residuals_pumps %||% 0,
+            transfer_method = p$transfer_method %||% 3,
+            res_transfer_method = p$res_transfer_method %||% 3,
+            eductors = p$eductors %||% 0, res_slurry_pumps = p$res_slurry_pumps %||% 0,
+            res_eductors = p$res_eductors %||% 0, mixers = p$mixers %||% 0
+          )
+
+          # chemical feed
+          chm_r <- calculate_chemical_feed(
+            transfer_method = p$transfer_method %||% 3, eductors = p$eductors %||% 0,
+            transfer_rate = p$transfer_rate %||% 0, eductor_size = p$eductor_size %||% NA,
+            res_holding = p$res_holding %||% "none",
+            res_transfer_method = p$res_transfer_method %||% 3,
+            res_slurry_pumps = p$res_slurry_pumps %||% 0,
+            res_eductors = p$res_eductors %||% 0,
+            res_transfer_rate = p$res_transfer_rate %||% 0,
+            res_eductor_size = p$res_eductor_size %||% NA,
+            hmixers = p$hmixers %||% 0, hmix_size = p$hmix_size %||% 0,
+            coag_cmixers = p$coag_cmixers %||% 0, coag_cmix_size = p$coag_cmix_size %||% 0,
+            polymer_cmixers = p$polymer_cmixers %||% 0,
+            polymer_cmix_size = p$polymer_cmix_size %||% 0, curve = p$curve %||% 1
+          )
+
+          # site & buildings — pass total_fp so sitework/land scale with basin layout
+          sit_r <- calculate_site_buildings(
+            include_buildings = p$include_buildings, include_hvac = p$include_hvac,
+            include_land = p$include_land, retrofit = p$retrofit,
+            total_contactors = con_r$total_contactors, design_flow = design_flow_mgd,
+            tank_geometry = p$tank_geometry, piping_length_lf = pip_r$piping_length_lf,
+            total_fp = basin_fp_c                     # ← per-n basin footprint
+          )
+
+          # capital costs
+          cap_r <- compile_capital_costs(
+            contactors = con_r, gac = gac_r, pumps = pmp_r, tanks = tnk_r,
+            piping = pip_r, controls = ctl_r, site = sit_r,
+            include_land = p$include_land, include_permits = p$include_permits,
+            include_pilot = p$include_pilot, retrofit = p$retrofit,
+            design_flow_mgd = design_flow_mgd,
+            residuals_disposal = p$residuals_disposal %||% "potw"
+          )
+
+          # O&M costs
+          om_r <- calculate_om_costs(
+            design_flow_mgd = design_flow_mgd, average_flow_mgd = average_flow_mgd,
+            gac_results = gac_r, pump_results = pmp_r, contactor_results = con_r,
+            tank_results = tnk_r, site_results = sit_r,
+            regen_type = p$regen_type %||% "regeneration off-site (non-hazardous)",
+            design_type = 2L, automation_level = p$automation_level,
+            residuals_disposal = p$residuals_disposal %||% "potw",
+            retrofit = p$retrofit, backwash_interval = p$backwash_interval,
+            num_trains = as.numeric(n_try), total_num_basins = as.numeric(total_num_c)
+          )
+
+          # Workbook OUTPUT C413 useful_life formula (same as pressure vessel):
+          # UL = ROUND((direct_for_UL + addon + indirect) /
+          #            (depr_direct + (addon+indirect)/build_UL), 1)
+          # Gravity basins: concrete basins (30yr), pumps (22yr), piping (17yr),
+          #                 controls (8yr), building (20yr), pad (37yr)
+          # GAC initial fill excluded from UL calc
+          pad_cost_g  <- 492.75
+          bldg_cost_g <- max(0, sit_r$building_cost - pad_cost_g)
+          depr_direct_g <- (
+            con_r$total_cost / 30 +   # concrete basins: 30yr
+            pmp_r$total_cost / 22 +
+            tnk_r$total_cost / 25 +
+            pip_r$total_cost / 17 +
+            ctl_r$total_cost / 8 +
+            bldg_cost_g / 20 +
+            pad_cost_g / 37
+          )
+          direct_for_UL_g <- (
+            con_r$total_cost + pmp_r$total_cost + tnk_r$total_cost +
+            pip_r$total_cost + ctl_r$total_cost + sit_r$building_cost
+          )
+          addon_indirect_g <- cap_r$addon_cost + cap_r$total_indirect
+          ul_g <- max(1, min(round(
+            (direct_for_UL_g + addon_indirect_g) /
+            (depr_direct_g + addon_indirect_g / 20), 1), 40))
+          crf_g_used <- r_disc * (1 + r_disc)^ul_g / ((1 + r_disc)^ul_g - 1)
+
+          # Workbook AutoSize_OptA minimises annualized_cost (OUTPUT C417) = total_project * CRF + OM_annual
+          list(ann = cap_r$total_project * crf_g_used + om_r$total_annual, valid = TRUE)
+
+        }),
+        error = function(e) {
+          message(sprintf("  gravity n=%d: WBS error — %s", n_try, conditionMessage(e)))
+          list(ann = Inf, valid = FALSE)
+        })
+      }
+
+      # ── min_n from AutoSize C148 ──────────────────────────────────────────────
+      c147_g   <- comp_vol / (max_bd_g * max_length_g^2)
+      min_n_g  <- max(1L, as.integer(ceiling(max(0.05, c147_g))))
+
+      extra_g      <- 5L      # comp_nlines_extra_search_a (AutoSize!C151)
+      best_ann_g   <- Inf
+      best_n_g     <- min_n_g;  best_lw_g  <- min_length_g;  best_bd_out <- min_bd_g
+      steps_past_g <- 0L;       n_invalid_g <- 0L
+
+      for (n_try in seq.int(min_n_g, 200L)) {
+        comp_sa_n    <- comp_vol / target_bd_g / n_try
+        raw_side     <- sqrt(comp_sa_n)
+        side_hit_min <- raw_side < min_length_g
+        raw_side_c   <- max(min_length_g, min(max_length_g, raw_side))
+        lw           <- ceiling(2 * raw_side_c) / 2
+        sa_basin     <- lw^2
+        raw_bd_g_try <- comp_vol / sa_basin / n_try
+        clamped_bd_g <- max(min_bd_g, min(max_bd_g, raw_bd_g_try))
+        bd           <- ceiling(clamped_bd_g * 10) / 10
+        loading      <- (df_gpm / n_try) / sa_basin
+
+        if (side_hit_min) {
+          feasible <- (raw_bd_g_try < min_bd_g) && (bd <= max_bd_g) &&
+                      (loading >= load_min_g) && (loading <= load_max_g)
+        } else {
+          feasible <- (bd >= min_bd_g) && (bd <= max_bd_g) &&
+                      (loading >= load_min_g) && (loading <= load_max_g)
+        }
+        if (!feasible || raw_bd_g_try > target_bd_g) {
+          message(sprintf("  gravity n=%d: side=%.1fft, raw_bd=%.3f [infeasible]",
+                          n_try, lw, raw_bd_g_try))
+          n_invalid_g <- n_invalid_g + 1L
+          if (n_invalid_g >= 5L) break
           next
         }
 
-        flow_cap <- sa_one * actual_bd * 7.48 / (ebct_num / num_series) * n_try
-        feasible <- (flow_cap >= df_gpm) && (actual_bd <= max_bd)
+        cost_r <- calc_ann_for_n(n_try, lw, bd)
+        if (!isTRUE(cost_r$valid)) {
+          n_invalid_g <- n_invalid_g + 1L
+          if (n_invalid_g >= 5L) break
+          next
+        }
+        n_invalid_g <- 0L
+        ann <- cost_r$ann
 
-        if (feasible) {
-          # NRD per workbook C34
-          if (flow_num >= 1.0) {
-            nrd <- as.integer(ceiling(n_try / redund_freq))
-          } else {
-            nrd <- if (n_try == 1L) nrd_small_1 else nrd_small
-          }
-          n_total <- n_try + nrd
+        message(sprintf("  gravity n=%d: side=%.1fft, bd=%.1fft, ann=$%.0f%s",
+                        n_try, lw, bd, ann,
+                        if (ann < best_ann_g) " *best*" else ""))
 
-          # Cost: fg equation ≤ 901 gal, cs power law above
-          vol_gal <- pi * (actual_d / 2)^2 * actual_h * 7.48
-          if (vol_gal <= fg_max_vol) {
-            cost_per <- fg_m * vol_gal^2 + fg_n_coef * vol_gal + fg_o
-          } else {
-            cost_per <- cs_a * vol_gal^cs_b
-          }
-          tot_cost <- cost_per * n_total
-
-          message(sprintf("  n=%d: diam=%.1fft, bd=%.1fft, h=%.1fft, vol=%.0fgal, n_total=%d, cost=%.0f%s",
-                          n_try, actual_d, actual_bd, actual_h, vol_gal, n_total, tot_cost,
-                          if (tot_cost < best_cost) " *best*" else ""))
-
-          if (tot_cost < best_cost) {
-            best_cost  <- tot_cost
-            best_n     <- as.integer(n_try)
-            best_d     <- actual_d
-            best_bd    <- actual_bd
-            best_h     <- actual_h
-            steps_past <- 0L
-          } else {
-            steps_past <- steps_past + 1L
-            if (steps_past >= extra_search) break
-          }
+        if (ann < best_ann_g) {
+          best_ann_g <- ann; best_n_g <- as.integer(n_try)
+          best_lw_g <- lw;   best_bd_out <- bd; steps_past_g <- 0L
         } else {
-          message(sprintf("  n=%d: diam=%.1fft, bd=%.1fft, cap=%.1f < %.1f gpm [infeasible]",
-                          n_try, actual_d, actual_bd, flow_cap, df_gpm))
+          steps_past_g <- steps_past_g + 1L
+          if (steps_past_g >= extra_g) break
+        }
+        if (raw_bd_g_try < min_bd_g) break
+      }
+
+      if (is.finite(best_ann_g)) {
+        params$num_trains   <- best_n_g
+        params$basin_width  <- best_lw_g
+        params$basin_length <- best_lw_g
+        params$basin_depth  <- best_bd_out
+        message(sprintf("  --> Gravity AutoSize: n=%d, side=%.1fft, bd=%.1fft (ann=$%.0f)",
+                        best_n_g, best_lw_g, best_bd_out, best_ann_g))
+      } else {
+        # WBS failed for all candidates — fall back to footprint proxy
+        message("  --> Gravity AutoSize: WBS failed, using footprint proxy")
+        best_fp_fb <- Inf; best_bd_fb <- -Inf
+        best_n_fb  <- min_n_g; best_lw_fb <- min_length_g; best_bd_fb2 <- min_bd_g
+        sp_fb <- 0L
+        for (n_try in seq.int(min_n_g, 200L)) {
+          raw_s <- sqrt(comp_vol / target_bd_g / n_try)
+          lw    <- ceiling(2 * max(min_length_g, min(max_length_g, raw_s))) / 2
+          sa    <- lw^2; raw_bd <- comp_vol / sa / n_try
+          bd    <- ceiling(max(min_bd_g, min(max_bd_g, raw_bd)) * 10) / 10
+          loading <- (df_gpm / n_try) / sa
+          sh <- raw_s < min_length_g
+          if (sh) feas <- (raw_bd<min_bd_g)&&(bd<=max_bd_g)&&(loading>=load_min_g)&&(loading<=load_max_g)
+          else    feas <- (bd>=min_bd_g)&&(bd<=max_bd_g)&&(loading>=load_min_g)&&(loading<=load_max_g)
+          if (!feas || raw_bd > target_bd_g) next
+          nrd_g <- if (n_try==1L) 1L else if (flow_num>=10) 2L else if (flow_num>=1) 1L else 0L
+          tn <- n_try + nrd_g; t <- 1.0
+          fp <- (tn*lw + (tn+1L)*t) * (lw + 2*t)
+          fp_pct <- if (is.finite(best_fp_fb)) (best_fp_fb-fp)/best_fp_fb*100 else 100
+          imp <- (fp_pct >= 1.8) || (fp < best_fp_fb && bd >= best_bd_fb)
+          if (imp) {
+            best_fp_fb <- fp; best_bd_fb <- bd; best_n_fb <- as.integer(n_try)
+            best_lw_fb <- lw; best_bd_fb2 <- bd; sp_fb <- 0L
+          } else { sp_fb <- sp_fb + 1L; if (sp_fb >= extra_g) break }
+          if (raw_bd < min_bd_g) break
+        }
+        params$num_trains   <- best_n_fb
+        params$basin_width  <- best_lw_fb
+        params$basin_length <- best_lw_fb
+        params$basin_depth  <- best_bd_fb2
+        message(sprintf("  --> Gravity AutoSize (fp fallback): n=%d, side=%.1fft, bd=%.1fft",
+                        best_n_fb, best_lw_fb, best_bd_fb2))
+      }
+
+    } else {
+      # Pressure vessel iterative AutoSize — mirrors workbook VBA (AutoSize_Opt).
+      #
+      # For each candidate n, geometry is derived from AutoSize sheet formulas,
+      # then annualized_cost = compile_capital_costs(...)$total_project * CRF
+      #                      + calculate_om_costs(...)$total_annual
+      # is evaluated using the full R WBS — the vessel-cost proxy is insufficient
+      # because per-train costs (piping, pumps, MOVs, controls) dominate at small scale.
+      #
+      # Geometry formulas (upright vessels):
+      #   target_bd  = IF(flow<=0.1, 4.0, 7.0)                    (CDA C25/C26)
+      #   raw_diam   = 2*(sqrt(sa_req/n/π) + Vessel_thickness)     (AutoSize C58)
+      #   diam (E58) = clamp then ROUNDUP(2*raw,0)/2               (rounds UP to 0.5)
+      #   bd   (E61) = clamp then ROUNDUP(raw_bd, 1)               (rounds UP to 0.1)
+      #   height(E62)= clamp then ROUNDUP(2*raw_h, 0)/2            (rounds UP to 0.5)
+      #   max_h      = MIN(VLOOKUP(diam, vessel_size_table, col3), 14)
+      #
+      # VBA stopping rules:
+      #   extra_search = comp_nlines_extra_search = AutoSize!C50 = 5
+      #   lNSinceMin (non-improvements) and lNInvalid (geometry failures) are separate;
+      #   MAX_INVALID = 5; invalid candidates do NOT consume lNSinceMin.
+
+      df_gpm     <- as.numeric(design_flow_mgd) * 1e6 / 1440
+      ebct_num   <- as.numeric(ebct_minutes)
+      num_series <- as.numeric(get_value(params$num_tanks, 1))
+      comp_vol   <- df_gpm * ebct_num / 7.481
+
+      flow_num  <- as.numeric(design_flow_mgd)
+      target_bd <- if (flow_num <= 0.1) 4.0 else 7.0   # CDA C25/C26
+
+      min_diam <- 1.5;  max_diam_upright <- 14.0   # workbook max_diam CDA C18/CC C24
+      min_bd   <- 2.0;  max_bd   <- 8.5
+      max_height_cda <- 14.0
+      bed_expansion  <- 0.5
+      freeboard      <- 0.5
+      Vessel_thickness <- 0.0
+
+      # Full vessel_size_table_cl (Engineering Data rows 230-252)
+      vessel_min_h <- c("1.5"=3,"2"=3.5,"2.5"=4,"3"=4,"3.5"=4.5,
+                        "4"=4.5,"4.5"=4.5,"5"=4.5,"5.5"=4.5,"6"=4.5,
+                        "6.5"=5.5,"7"=5.5,"7.5"=6,"8"=6,"8.5"=6,
+                        "9"=6,"9.5"=6,"10"=6,"10.5"=6,"11"=6,"11.5"=6,
+                        "12"=6,"14"=6)
+      vessel_max_h <- c("1.5"=6,"2"=7.5,"2.5"=9,"3"=10,"3.5"=10,
+                        "4"=12,"4.5"=15,"5"=15,"5.5"=15,"6"=18,
+                        "6.5"=18,"7"=18,"7.5"=18,"8"=20,"8.5"=20,
+                        "9"=20,"9.5"=20,"10"=24,"10.5"=24,"11"=24,
+                        "11.5"=24,"12"=24,"14"=24)
+      vlookup_vessel <- function(d, tbl) {
+        keys <- as.numeric(names(tbl))
+        tbl[[max(which(keys <= d), 1L)]]
+      }
+
+      redund_freq <- 4L
+
+      r_disc <- 0.07;  ul_yrs <- 16.1
+      crf_p  <- r_disc * (1 + r_disc)^ul_yrs / ((1 + r_disc)^ul_yrs - 1)
+
+      # ── Nested WBS helper for pressure vessels ────────────────────────────
+      calc_ann_pv <- function(n_try, actual_d, actual_bd, actual_h) {
+        tryCatch(suppressMessages({
+          p <- params
+          p$num_trains           <- as.integer(n_try)
+          p$vessel_diameter      <- actual_d
+          p$vessel_height_length <- actual_h
+          p$bed_depth            <- actual_bd
+          p$use_autosize_a       <- "no"
+
+          # NRD mirrors workbook Contactor Constraints C34:
+          #   flow<1: n==1 → 1 redundant vessel; n>1 → 0
+          #   flow>=1: ROUNDUP(n/4, 0) redundant vessels
+          # Without this, redundancy stays at params$redundancy (0 default),
+          # so total_contactors = n instead of n+NRD — vessel cost is wrong.
+          pv_nrd <- if (flow_num < 1.0) {
+            if (n_try == 1L) 1L else 0L
+          } else {
+            as.integer(ceiling(n_try / redund_freq))
+          }
+          p$redundancy <- pv_nrd
+
+          p$service_pumps      <- as.numeric(get_value(p$service_pumps,      0))
+          p$backwash_pumps     <- as.numeric(get_value(p$backwash_pumps,     0))
+          p$residuals_pumps    <- as.numeric(get_value(p$residuals_pumps,    0))
+          p$no_backwash        <- as.numeric(get_value(p$no_backwash,        0))
+          p$no_backwash_tank   <- get_value(p$no_backwash_tank,   FALSE)
+          p$backwash_interval  <- as.numeric(get_value(p$backwash_interval,  168))
+          p$residuals_disposal <- get_value(p$residuals_disposal, "POTW")
+          p$residuals_tank     <- get_value(p$residuals_tank,     "no holding tank")
+          p$automation_level   <- get_value(p$automation_level,   "fully automated")
+          p$manual_override    <- get_value(p$manual_override,    FALSE)
+          p$include_buildings  <- get_value(p$include_buildings,  TRUE)
+          p$include_hvac       <- get_value(p$include_hvac,       FALSE)
+          p$include_land       <- get_value(p$include_land,       TRUE)
+          p$include_permits    <- get_value(p$include_permits,    TRUE)
+          p$include_pilot      <- get_value(p$include_pilot,      TRUE)
+          p$retrofit           <- get_value(p$retrofit,           FALSE)
+          p$regen_type         <- get_value(p$regen_type, "regeneration off-site (non-hazardous)")
+          p$backwash_frequency <- as.numeric(get_value(p$backwash_frequency, 52))
+
+          ss_cat2_p <- if (design_flow_mgd < 1) 1L else if (design_flow_mgd < 10) 2L else 3L
+
+          con_r <- calculate_contactors(
+            design_flow = design_flow_mgd, ebct = ebct_num,
+            geometry = p$tank_geometry, num_trains = as.integer(n_try),
+            num_contactors_in_series = num_series,
+            redundancy = p$redundancy, bed_depth = actual_bd,
+            diameter = actual_d, height_length = actual_h,
+            basin_length = NULL, basin_width = NULL, basin_depth = NULL
+          )
+          gac_r <- calculate_gac_requirements(
+            total_volume = con_r$gac_volume_per_contactor * as.integer(n_try),
+            influent_conc = p$influent_conc,
+            effluent_target = p$effluent_target, average_flow = average_flow_mgd,
+            regen_type = p$regen_type, freund_type = p$freund_type %||% 4,
+            freund_1 = p$freund_1 %||% 66600, freund_2 = p$freund_2 %||% NULL,
+            design_type = 1L, media_volume = con_r$gac_volume_per_contactor,
+            num_treat_lines = as.integer(n_try),
+            BV_definition = p$BV_definition %||% "EBCT per vessel",
+            Num_tanks = num_series
+          )
+          pmp_r <- calculate_pumps(
+            design_flow = design_flow_mgd, num_trains = as.integer(n_try),
+            service_pumps = p$service_pumps, backwash_pumps = p$backwash_pumps,
+            residuals_pumps = p$residuals_pumps, tank_geometry = p$tank_geometry,
+            no_backwash = p$no_backwash, ss_cat2 = p$ss_cat2 %||% ss_cat2_p,
+            water_flush_gpm = round(12 * pi * (actual_d / 2)^2, 0)
+          )
+          tnk_r <- calculate_tanks(
+            design_flow = design_flow_mgd, no_backwash = p$no_backwash,
+            no_backwash_tank = p$no_backwash_tank, backwash_interval = p$backwash_interval,
+            residuals_disposal = p$residuals_disposal, residuals_tank = p$residuals_tank,
+            num_contactors = con_r$total_contactors, component_level = 1,
+            vessel_sa = pi * (actual_d / 2)^2   # comm_SA = π*(d/2)² for upright vessels
+          )
+          pip_r <- calculate_piping_valves(
+            num_contactors = con_r$total_contactors, num_trains = as.integer(n_try),
+            automation_level = p$automation_level, design_flow_mgd = design_flow_mgd,
+            component_level = 1, no_backwash = p$no_backwash, facil_length = NULL,
+            vessel_diameter = actual_d, vessel_length = actual_h,
+            tank_geometry = p$tank_geometry, params = p, tanks = tnk_r,
+            backwash_pumps = pmp_r$backwash_pumps %||% 0,
+            num_back_tanks = tnk_r$num_back_tanks %||% 0,
+            num_booster_pumps = pmp_r$booster_pumps %||% 0
+          )
+          ctl_r <- calculate_controls(
+            automation_level = p$automation_level, num_contactors = con_r$total_contactors,
+            num_trains = as.integer(n_try), manual_override = p$manual_override,
+            ss_cat2 = p$ss_cat2 %||% ss_cat2_p, design_type = p$design_type %||% 1,
+            add_on = p$add_on %||% 0, num_back_tanks = tnk_r$num_back_tanks %||% 0,
+            res_holding = p$res_holding %||% "none",
+            num_res_tanks = tnk_r$num_residuals_tanks %||% 0,
+            num_res_basins = tnk_r$num_residuals_basins %||% 0,
+            bp_pct = p$bp_pct %||% 0,
+            in_out_pipe_diam = pip_r$in_out_pipe_diam %||% 1.5,
+            proc_pipe_diam = pip_r$proc_pipe_diam %||% 1.5,
+            back_pipe_diam = pip_r$back_pipe_diam %||% 2.0,
+            res_pipe_diam = pip_r$res_pipe_diam %||% 2.0,
+            tot_MOVs = pip_r$mov_quantity %||% 0,
+            fm_lkp_io = p$fm_lkp_io %||% "flow_prop",
+            fm_lkp_proc = p$fm_lkp_proc %||% "flow_mag",
+            fm_lkp_back = p$fm_lkp_back %||% "flow_prop",
+            fm_lkp_res = p$fm_lkp_res %||% "flow_prop",
+            Operator_LOE = p$Operator_LOE %||% 40.607,
+            booster_pumps = pmp_r$booster_pumps %||% 0,
+            backwash_pumps = pmp_r$backwash_pumps %||% 0,
+            res_pumps = pmp_r$residuals_pumps %||% 0,
+            transfer_method = p$transfer_method %||% 3,
+            res_transfer_method = p$res_transfer_method %||% 3,
+            eductors = p$eductors %||% 0, res_slurry_pumps = p$res_slurry_pumps %||% 0,
+            res_eductors = p$res_eductors %||% 0, mixers = p$mixers %||% 0
+          )
+          chm_r <- calculate_chemical_feed(
+            transfer_method = p$transfer_method %||% 3, eductors = p$eductors %||% 0,
+            transfer_rate = p$transfer_rate %||% 0, eductor_size = p$eductor_size %||% NA,
+            res_holding = p$res_holding %||% "none",
+            res_transfer_method = p$res_transfer_method %||% 3,
+            res_slurry_pumps = p$res_slurry_pumps %||% 0, res_eductors = p$res_eductors %||% 0,
+            res_transfer_rate = p$res_transfer_rate %||% 0, res_eductor_size = p$res_eductor_size %||% NA,
+            hmixers = p$hmixers %||% 0, hmix_size = p$hmix_size %||% 0,
+            coag_cmixers = p$coag_cmixers %||% 0, coag_cmix_size = p$coag_cmix_size %||% 0,
+            polymer_cmixers = p$polymer_cmixers %||% 0, polymer_cmix_size = p$polymer_cmix_size %||% 0,
+            curve = p$curve %||% 1
+          )
+          sit_r <- calculate_site_buildings(
+            include_buildings = p$include_buildings, include_hvac = p$include_hvac,
+            include_land = p$include_land, retrofit = p$retrofit,
+            total_contactors = con_r$total_contactors, design_flow = design_flow_mgd,
+            tank_geometry = p$tank_geometry, piping_length_lf = pip_r$piping_length_lf,
+            # Workbook PPS row 77: build1_fp = ROUNDUP(IF(fp_required<10000, fp_required, vessel_fp), -1)
+            # fp_required (PPS row 76) = vessel_fp + back_tank_fp + pump_fp + office_fp
+            # vessel_fp (row 58/59): space = MIN(d, 6ft custom) or MIN(d, 1ft skid)
+            total_fp = {
+              d_s  <- actual_d
+              n_s  <- con_r$total_contactors
+              sp_s <- min(d_s, if (design_flow_mgd < 1) 1 else 6)
+              vfp_s <- if (design_flow_mgd < 1)
+                ceiling((d_s+2*sp_s)^2 + (n_s-1)*(d_s+2*sp_s)*(d_s+sp_s/2))  # skid
+              else
+                ceiling((d_s+2*sp_s)^2 + (n_s-1)*(d_s+2*sp_s)*(d_s+sp_s))    # custom
+              if (design_flow_mgd < 1) {
+                vfp_s   # small: no bt_fp / pump_fp / office_fp
+              } else {
+                wf_s    <- round(12 * pi * (d_s/2)^2, 0)
+                bv_s    <- wf_s * 10 / 7.48
+                # Workbook bt_diam: ROUNDUP(2*MAX((2*bt_cf/PI())^(1/3), (4*bt_cf/PI()/(14-2))^0.5), 0)
+                bt_d_s  <- ceiling(2 * max((2*bv_s/pi)^(1/3), sqrt(4*bv_s/pi/12)))
+                sp_bt_s <- min(bt_d_s, 6)
+                bt_fp_s <- ceiling((bt_d_s + 2*sp_bt_s)^2)
+                # pump_fp: actual booster + backwash pump footprints from pump_dim_table_cl
+                # pump_dim_table_cl: 0-350gpm→2.5x2.5ft, 351-1740→3.75x3.75, 1741-7000→5x5, >7001→7.083x7.083
+                # space_pumps_cust = 4ft
+                sp_p_s <- 4
+                booster_gpm_s <- min(design_flow_mgd * 1e6 / 1440 * 1.25, 35000)
+                pump_l_s <- if (booster_gpm_s <= 350) 2.5 else if (booster_gpm_s <= 1740) 3.75 else if (booster_gpm_s <= 7000) 5 else 7.083
+                pump_w_s <- pump_l_s
+                boost_fp_s <- ceiling((pump_l_s+sp_p_s)*(pump_w_s+2*sp_p_s))
+                bpft_s   <- wf_s * 1.25
+                n_bop_s  <- max(1L, ceiling(bpft_s / 10000))
+                n_btot_s <- n_bop_s + 1L
+                bpr_s    <- bpft_s / n_bop_s
+                bpl_s    <- if (bpr_s <= 350) 2.5 else if (bpr_s <= 1740) 3.75 else if (bpr_s <= 7000) 5 else 7.083
+                bpw_s    <- bpl_s
+                back_pump_fp_s <- ceiling((bpl_s+sp_p_s)*(bpw_s+2*sp_p_s) + (n_btot_s-1)*(bpl_s+2*sp_p_s)*(bpw_s+sp_p_s))
+                pump_fp_s <- boost_fp_s + back_pump_fp_s
+                n_e_s   <- if      (design_flow_mgd <= 0.124)  1.0
+                           else if (design_flow_mgd <= 0.74)   1.2
+                           else if (design_flow_mgd <= 2.152)  1.6
+                           else if (design_flow_mgd <= 7.365)  2.8
+                           else if (design_flow_mgd <= 22.614) 3.8
+                           else 7.8
+                fp_req_s <- vfp_s + bt_fp_s + pump_fp_s + n_e_s * 100
+                if (fp_req_s >= 10000) vfp_s else fp_req_s
+              }
+            }
+          )
+          cap_r <- compile_capital_costs(
+            contactors = con_r, gac = gac_r, pumps = pmp_r, tanks = tnk_r,
+            piping = pip_r, controls = ctl_r, site = sit_r,
+            include_land = p$include_land, include_permits = p$include_permits,
+            include_pilot = p$include_pilot, retrofit = p$retrofit,
+            design_flow_mgd = design_flow_mgd,
+            residuals_disposal = p$residuals_disposal %||% "potw"
+          )
+          om_r <- calculate_om_costs(
+            design_flow_mgd = design_flow_mgd, average_flow_mgd = average_flow_mgd,
+            gac_results = gac_r, pump_results = pmp_r, contactor_results = con_r,
+            tank_results = tnk_r, site_results = sit_r,
+            regen_type = p$regen_type %||% "regeneration off-site (non-hazardous)",
+            design_type = 1L, automation_level = p$automation_level,
+            residuals_disposal = p$residuals_disposal %||% "potw",
+            retrofit = p$retrofit, backwash_interval = p$backwash_interval,
+            num_trains = as.numeric(n_try), total_num_basins = NULL
+          )
+          # Workbook OUTPUT C413: useful_life = ROUND((direct_for_UL + addon + indirect) /
+          #   (total_direct_depreciation + (addon+indirect)/build_UL), 1)
+          # direct_for_UL = direct capital EXCLUDING GAC initial fill
+          # total_direct_depreciation = sum(component_cost / component_UL)
+          # build_UL = 20yr (shed/building UL, from OUTPUT AJ rows)
+          # Component ULs: vessels=30(CSP/CS)/20(FG), pumps=22, tanks=25,
+          #                piping=17, controls=8, building=20, pad=37
+          vessel_ul_p <- if (actual_d > 0) {
+            # Volume > 901 gal → cascaded to CSP (30yr); FG only for <=901 gal (20yr)
+            vol_gal_p <- pi * (actual_d/2)^2 * actual_h * 7.48052
+            if (vol_gal_p > 901) 30 else 20
+          } else 30
+          # Split site cost into building (20yr) and concrete pad (37yr)
+          # Approximate: pad_cost ≈ $493 (concrete_pad_uc), rest = building
+          pad_cost_p  <- 492.75  # concrete_pad_uc
+          bldg_cost_p <- max(0, sit_r$building_cost - pad_cost_p)
+          depr_direct_p <- (
+            con_r$total_cost / vessel_ul_p +
+            pmp_r$total_cost / 22 +
+            tnk_r$total_cost / 25 +
+            pip_r$total_cost / 17 +
+            ctl_r$total_cost / 8 +
+            bldg_cost_p / 20 +
+            pad_cost_p / 37
+          )
+          direct_for_UL_p <- (
+            con_r$total_cost + pmp_r$total_cost + tnk_r$total_cost +
+            pip_r$total_cost + ctl_r$total_cost + sit_r$building_cost
+          )  # excludes gac_r$initial_fill_cost (GAC media excluded from UL)
+          addon_indirect_p <- cap_r$addon_cost + cap_r$total_indirect
+          build_UL_p       <- 20  # building UL (shed, CDA/OUTPUT row 20yr)
+          ul_p <- round(
+            (direct_for_UL_p + addon_indirect_p) /
+            (depr_direct_p + addon_indirect_p / build_UL_p),
+            1
+          )
+          ul_p <- max(1, min(ul_p, 40))  # guard against extremes
+          crf_used <- r_disc * (1 + r_disc)^ul_p / ((1 + r_disc)^ul_p - 1)
+          # --- CALC_ANN_PV DEBUG ---
+          # Workbook AutoSize_Opt minimises annualized_cost (OUTPUT C417) = total_project * CRF + OM_annual
+          ann_val <- cap_r$total_project * crf_used + om_r$total_annual
+          cat(sprintf("[CALC_ANN_PV] n=%d d=%.1f bd=%.1f h=%.1f | vessels=%d | contactor=$%.0f | gac_init=$%.0f | pump=$%.0f | tank=$%.0f | piping=$%.0f | controls=$%.0f | site=$%.0f\n",
+                          n_try, actual_d, actual_bd, actual_h,
+                          con_r$total_contactors,
+                          con_r$total_cost,
+                          gac_r$initial_fill_cost,
+                          pmp_r$total_cost,
+                          tnk_r$total_cost,
+                          pip_r$total_cost,
+                          ctl_r$total_cost,
+                          sit_r$total_cost))
+          cat(sprintf("[CALC_ANN_PV] n=%d | direct=$%.0f | indirect=$%.0f | addon=$%.0f | total_project=$%.0f | om_annual=$%.0f | ul=%.1fyr | ann=$%.2f\n",
+                          n_try,
+                          cap_r$total_direct,
+                          cap_r$total_indirect,
+                          cap_r$addon_cost,
+                          cap_r$total_project,
+                          om_r$total_annual,
+                          ul_p,
+                          ann_val))
+          cat(sprintf("[CALC_ANN_PV_OM] n=%d | gac_makeup=$%.0f | gac_regen=$%.0f | bldg_maint=$%.0f | labor=$%.0f | misc=$%.0f | other=$%.0f\n",
+                          n_try,
+                          om_r$gac_makeup_cost   %||% 0,
+                          om_r$gac_regen_cost    %||% 0,
+                          om_r$building_maint    %||% 0,
+                          (om_r$manager_labor_cost %||% 0) + (om_r$clerical_labor_cost %||% 0) + (om_r$operator_labor_cost %||% 0),
+                          om_r$misc_allowance    %||% 0,
+                          om_r$total_annual - (om_r$gac_makeup_cost %||% 0) - (om_r$gac_regen_cost %||% 0) -
+                            (om_r$building_maint %||% 0) -
+                            (om_r$manager_labor_cost %||% 0) - (om_r$clerical_labor_cost %||% 0) -
+                            (om_r$operator_labor_cost %||% 0) - (om_r$misc_allowance %||% 0)))
+          # --- END CALC_ANN_PV DEBUG ---
+          list(ann = ann_val, valid = TRUE)
+        }),
+        error = function(e) {
+          message(sprintf("  pv n=%d: WBS error — %s", n_try, conditionMessage(e)))
+          list(ann = Inf, valid = FALSE)
+        })
+      }
+
+      # ── comp_vert_min_number (AutoSize C26-C29) ────────────────────────────
+      # Workbook uses max_diam (14 ft) for the max-vessel SA/volume bounds,
+      # NOT max_diam_upright (which is the per-iteration clamp, same value here).
+      # comp_max_vert_bed_depth = ROUNDDOWN(MIN((max_height-freeboard)/(1+expansion), max_bd), 1)
+      # For max_height=14, freeboard=0.5, expansion=0.5: = ROUNDDOWN(MIN(9.0,8.5),1) = 8.5
+      comp_max_vert_bd_global <- floor(min((max_height_cda - freeboard)/(1 + bed_expansion), max_bd) * 10) / 10
+      comp_vert_max_sa  <- (max_diam_upright / 2)^2 * pi          # AutoSize C22: uses max_diam=14
+      comp_vert_max_media <- comp_vert_max_sa * comp_max_vert_bd_global  # AutoSize C21
+      c26_min <- if (comp_vert_max_sa > 0) (df_gpm / 10) / comp_vert_max_sa else 0
+      c27_min <- if (comp_vert_max_sa > 0) (comp_vol / target_bd) / comp_vert_max_sa else 0
+      c28_min <- if (comp_vert_max_media > 0) comp_vol / comp_vert_max_media else 0   # uses comp_vol_stg1 in WB but comp_vol≈comp_vol_stg1
+      min_n_pv <- max(1L, as.integer(ceiling(max(c26_min, c27_min, c28_min))))
+
+      extra_search <- 5L
+      best_ann  <- Inf;  best_n <- 1L
+      best_d    <- min_diam; best_bd <- min_bd; best_h <- 6.0
+      steps_past <- 0L;  n_invalid <- 0L
+
+      for (n_try in seq.int(min_n_pv, 200L)) {
+
+        # ── Geometry ─────────────────────────────────────────────────────────
+        comp_sa_n <- comp_vol / target_bd / n_try
+        raw_d     <- 2 * (sqrt(comp_sa_n / pi) + Vessel_thickness)
+        c88       <- 2 * (sqrt(comp_vol / num_series / pi / max_bd / n_try) + Vessel_thickness)
+        comp_min_d <- ceiling(2 * max(c88, min_diam)) / 2
+
+        if (raw_d < comp_min_d)         { actual_d <- comp_min_d }
+        else if (raw_d > max_diam_upright) { actual_d <- max_diam_upright }
+        else                             { actual_d <- ceiling(2 * raw_d) / 2 }
+
+        max_h_tbl <- vlookup_vessel(actual_d, vessel_max_h)
+        min_h_tbl <- vlookup_vessel(actual_d, vessel_min_h)
+        max_h     <- min(max_h_tbl, max_height_cda)
+        c101      <- (max_h - freeboard) / (1 + bed_expansion)
+        max_bd_v  <- floor(min(c101, max_bd) * 10) / 10
+
+        sa_one <- pi * ((actual_d - 2 * Vessel_thickness) / 2)^2
+        raw_bd <- comp_vol / num_series / (sa_one * n_try)
+
+        if (raw_bd < min_bd) {
+          actual_bd <- min_bd
+        } else if (raw_bd > max_bd_v) {
+          n_invalid <- n_invalid + 1L
+          message(sprintf("  pv n=%d: d=%.1fft raw_bd=%.3f>%.1f [invalid %d]",
+                          n_try, actual_d, raw_bd, max_bd_v, n_invalid))
+          if (n_invalid >= 5L) break
+          next
+        } else {
+          actual_bd <- ceiling(raw_bd * 10) / 10
+        }
+
+        raw_h    <- (1 + bed_expansion) * actual_bd + freeboard
+        if (raw_h < min_h_tbl) {
+          n_invalid <- n_invalid + 1L
+          message(sprintf("  pv n=%d: d=%.1fft h=%.2f<%.1f [invalid %d]",
+                          n_try, actual_d, raw_h, min_h_tbl, n_invalid))
+          if (n_invalid >= 5L) break
+          next
+        }
+        n_invalid <- 0L
+        # E62: ROUNDUP(2*raw_h, 0)/2 then clamp to max_h
+        actual_h <- min(max_h, ceiling(2 * raw_h) / 2)
+
+        # Capacity check
+        flow_cap <- sa_one * actual_bd * 7.48 / (ebct_num / num_series) * n_try
+        if (flow_cap < df_gpm) {
+          message(sprintf("  pv n=%d: d=%.1fft cap=%.1f<%.1f gpm [infeasible]",
+                          n_try, actual_d, flow_cap, df_gpm))
+          next
+        }
+
+        # ── Full WBS evaluation ──────────────────────────────────────────────
+        # --- AUTOSIZE DEBUG START ---
+        message(sprintf("[AUTOSIZE_DEBUG] n=%d | raw_d=%.4f | comp_min_d=%.4f | actual_d=%.4f | raw_bd=%.4f | max_bd_v=%.4f | actual_bd=%.4f | raw_h=%.4f | actual_h=%.4f",
+                        n_try, raw_d, comp_min_d, actual_d, raw_bd, max_bd_v, actual_bd,
+                        (1 + bed_expansion) * actual_bd + freeboard, actual_h))
+
+        # Compute NRD for this candidate the same way calc_ann_pv does
+        dbg_nrd <- if (flow_num < 1.0) { if (n_try == 1L) 1L else 0L } else as.integer(ceiling(n_try / redund_freq))
+        dbg_total_vessels <- n_try * num_series + dbg_nrd
+        dbg_sa <- pi * (actual_d / 2)^2
+        dbg_gac_vol_per <- dbg_sa * actual_bd
+        dbg_gac_vol_total <- dbg_gac_vol_per * dbg_total_vessels
+        message(sprintf("[AUTOSIZE_DEBUG] n=%d | NRD=%d | total_vessels=%d | sa_one=%.4f ft2 | gac_vol_per=%.4f ft3 | gac_vol_total=%.4f ft3",
+                        n_try, dbg_nrd, dbg_total_vessels, dbg_sa, dbg_gac_vol_per, dbg_gac_vol_total))
+        # --- AUTOSIZE DEBUG END ---
+
+        cost_r <- calc_ann_pv(n_try, actual_d, actual_bd, actual_h)
+
+        if (!isTRUE(cost_r$valid)) {
+          n_invalid <- n_invalid + 1L
+          message(sprintf("[AUTOSIZE_DEBUG] n=%d WBS FAILED (n_invalid=%d)", n_try, n_invalid))
+          if (n_invalid >= 5L) break
+          next
+        }
+        n_invalid <- 0L
+        ann <- cost_r$ann
+
+        # --- AUTOSIZE COST DEBUG START ---
+        message(sprintf("[AUTOSIZE_DEBUG] n=%d | ann=$%.2f | best_ann=$%.2f | steps_past=%d | %s",
+                        n_try, ann, best_ann, steps_past,
+                        if (ann < best_ann) "*** NEW BEST ***" else sprintf("worse by $%.2f", ann - best_ann)))
+        # --- AUTOSIZE COST DEBUG END ---
+
+        message(sprintf("  pv n=%d: d=%.1fft bd=%.1fft h=%.1fft ann=$%.0f%s",
+                        n_try, actual_d, actual_bd, actual_h, ann,
+                        if (ann < best_ann) " *best*" else ""))
+
+        if (ann < best_ann) {
+          best_ann <- ann; best_n <- as.integer(n_try)
+          best_d   <- actual_d; best_bd <- actual_bd; best_h <- actual_h
+          steps_past <- 0L
+        } else {
+          steps_past <- steps_past + 1L
+          if (steps_past >= extra_search) break
         }
       }
 
-      if (is.finite(best_cost)) {
+      if (is.finite(best_ann)) {
         params$num_trains           <- best_n
         params$vessel_diameter      <- best_d
         params$bed_depth            <- best_bd
         params$vessel_height_length <- best_h
-        message(sprintf("  --> AutoSize selected: n=%d, diam=%.1fft, bd=%.1fft, h=%.1fft (cost=%.0f)",
-                        best_n, best_d, best_bd, best_h, best_cost))
+        message(sprintf("  --> PV AutoSize: n=%d, d=%.1fft, bd=%.1fft, h=%.1fft (ann=$%.0f)",
+                        best_n, best_d, best_bd, best_h, best_ann))
+        message(sprintf("[AUTOSIZE_WINNER] n=%d | d=%.1fft | bd=%.1fft | h=%.1fft | ann=$%.2f",
+                        best_n, best_d, best_bd, best_h, best_ann))
       } else {
-        message("  AutoSize: no feasible upright solution found — defaulting to n=1")
-        params$num_trains <- 1L
+        message("  PV AutoSize: no feasible solution — defaulting n=1, d=1.5ft, bd=2.0ft")
+        params$num_trains           <- 1L
+        params$vessel_diameter      <- 1.5
+        params$bed_depth            <- 2.0
+        params$vessel_height_length <- 6.0
       }
     }
 
@@ -531,7 +1147,35 @@ calculate_gac_system <- function(params) {
 
   # Ensure at least 1 train
   params$num_trains <- max(1, as.integer(params$num_trains))
-  
+
+  # ── Re-derive NRD for pressure vessels (Bug 2 fix) ──────────────────────────
+  # Workbook CC C34:
+  #   NRD = IF(NRD_I<>"", NRD_I,
+  #            IF(design_flow >= 1, ROUNDUP(num_treat_lines / redund_freq, 0),
+  #               IF(op_num_tanks = 1, NRD_small_1, NRD_small)))
+  # CDA: redund_freq=4, NRD_small_1=1, NRD_small=0
+  # This must be applied AFTER num_trains is resolved so total_contactors is correct.
+  # Only applies to pressure vessel designs; gravity NRD is handled separately below.
+  if (!isTRUE(tolower(params$tank_geometry %||% "") == "basin")) {
+    nrd_i_val <- suppressWarnings(as.numeric(params$redundancy))
+    if (!is.na(nrd_i_val) && nrd_i_val >= 0) {
+      # User explicitly set NRD_I — honour it (workbook CC C34: IF(NRD_I<>"", NRD_I, ...))
+      params$redundancy <- as.integer(nrd_i_val)
+    } else {
+      # NRD_I blank → apply workbook formula (CC C34)
+      n_trains     <- as.integer(params$num_trains)
+      n_series     <- as.integer(get_value(params$num_contactors_in_series, 1))
+      op_num_tanks <- n_trains * n_series
+      params$redundancy <- if (design_flow_mgd >= 1) {
+        as.integer(ceiling(n_trains / 4))   # ROUNDUP(num_treat_lines / redund_freq, 0)
+      } else if (op_num_tanks == 1L) {
+        1L                                   # NRD_small_1 = 1
+      } else {
+        0L                                   # NRD_small = 0
+      }
+    }
+  }
+
   # Determine if we should use AutoSize
   use_autosize <- FALSE
   if (!is.null(params$standard_inputs) && !is.null(params$standard_inputs$use_autosize)) {
@@ -600,29 +1244,6 @@ calculate_gac_system <- function(params) {
     # bed depth loaded from Google Sheets, which must not bleed into basin calculations.
     params$bed_depth <- params$basin_depth
     message(paste("Basin design: bed_depth set to basin_depth =", params$bed_depth, "ft"))
-  # } else if (is_missing(params$bed_depth) || use_autosize) {
-  #   # Pressure vessel AutoSize — derive bed_depth from vessel geometry
-  #   message("Running AutoSize to calculate bed depth...")
-  #   message(paste("  Inputs: flow =", design_flow_mgd, "MGD, ebct =", ebct_minutes,
-  #                 "min, num_trains =", params$num_trains, ", diameter =", params$vessel_diameter, "ft"))
-    # AutoSize: bed_depth = volume_per_vessel_cf / cross_section_area
-    # volume_per_vessel_cf = design_flow_gpm * ebct / 7.48 / num_trains
-    # cross_section_area (upright) = pi * (diameter/2)^2
-    # cross_section_area (horizontal) = diameter * height_length
-    # {
-    #   design_flow_gpm_as <- design_flow_mgd * 1e6 / 1440
-    #   vol_per_vessel_cf  <- design_flow_gpm_as * ebct_minutes / 7.48 /
-    #                           max(1, as.numeric(params$num_trains))
-    #   geom <- tolower(params$tank_geometry)
-    #   diam <- as.numeric(params$vessel_diameter)
-    #   if (geom == "horizontal") {
-    #     ht   <- as.numeric(params$vessel_height_length)
-    #     xsa  <- diam * ht
-    #   } else {
-    #     xsa  <- pi * (diam / 2)^2
-    #   }
-    #   params$bed_depth <- if (xsa > 0) max(2, vol_per_vessel_cf / xsa) else 3.5
-    # }
 
     } else if ((is_missing(params$bed_depth) || use_autosize) && need_to_calculate_trains == FALSE) {
   message("Running AutoSize to calculate bed depth...")
@@ -645,6 +1266,11 @@ calculate_gac_system <- function(params) {
   # Apply final defaults for vessel dimensions if still missing
   params$vessel_diameter <- as.numeric(get_value(params$vessel_diameter, 2))
   params$vessel_height_length <- as.numeric(get_value(params$vessel_height_length, 6))
+  if (is.null(params$bed_depth) || length(params$bed_depth) == 0 ||
+      is.na(suppressWarnings(as.numeric(params$bed_depth)))) {
+    message("  bed_depth is missing after AutoSize — applying minimum default 2.0 ft")
+    params$bed_depth <- 2.0
+  }
   params$tank_geometry <- get_value(params$tank_geometry, "upright")
   params$basin_length <- as.numeric(get_value(params$basin_length, 10))
   params$basin_width <- as.numeric(get_value(params$basin_width, 10))
@@ -724,8 +1350,11 @@ calculate_gac_system <- function(params) {
   }
 
   # Calculate GAC requirements
+  # Workbook: GAC_each = media_volume × num_treat_lines (operating trains only, NRD excluded)
+  # total_gac_volume includes NRD standby vessels — incorrect for O&M regen calculation
   gac_results <- calculate_gac_requirements(
-    total_volume    = contactor_results$total_gac_volume,
+    total_volume    = contactor_results$gac_volume_per_contactor *
+                        (params$num_trains %||% contactor_results$total_contactors),
     influent_conc   = params$influent_conc,
     effluent_target = params$effluent_target,
     average_flow    = average_flow_mgd,
@@ -749,6 +1378,14 @@ calculate_gac_system <- function(params) {
     basin_op_depth  = contactor_results$basin_depth 
   )
   
+  # Workbook: ss_cat2 = 1 (<1 MGD), 2 (1-10 MGD), 3 (>10 MGD)
+  # Controls pump inclusion, NRD, building type, etc.
+  # params$ss_cat2 is typically NULL (not user-supplied), so must derive from flow.
+  ss_cat2_main <- if (!is.null(params$ss_cat2) &&
+                       !is.na(suppressWarnings(as.numeric(params$ss_cat2)))) {
+    as.integer(params$ss_cat2)
+  } else if (design_flow_mgd < 1) 1L else if (design_flow_mgd <= 10) 2L else 3L
+
   # Calculate pump requirements
   pump_results <- calculate_pumps(
     design_flow     = design_flow_mgd,
@@ -758,7 +1395,18 @@ calculate_gac_system <- function(params) {
     residuals_pumps = params$residuals_pumps,
     tank_geometry   = params$tank_geometry,
     no_backwash     = params$no_backwash,
-    ss_cat2         = params$ss_cat2 %||% 1
+    ss_cat2         = ss_cat2_main,
+    water_flush_gpm = {
+      geom <- tolower(params$tank_geometry %||% "upright")
+      if (geom == "basin") {
+        bw <- as.numeric(contactor_results$basin_width  %||% params$basin_width  %||% 0)
+        bl <- as.numeric(contactor_results$basin_length %||% params$basin_length %||% 0)
+        if (bw > 0 && bl > 0) round(12 * bw * bl, 0) else 0
+      } else {
+        diam <- as.numeric(contactor_results$diameter %||% params$vessel_diameter %||% 0)
+        if (diam > 0) round(12 * pi * (diam/2)^2, 0) else 0
+      }
+    }
   )
   
   # Calculate tank requirements
@@ -770,18 +1418,22 @@ calculate_gac_system <- function(params) {
     residuals_disposal = params$residuals_disposal,
     residuals_tank = params$residuals_tank,
     num_contactors = contactor_results$total_contactors,
-    component_level = 1  # Default to low-cost
+    component_level = 1,  # Default to low-cost
+    # comm_SA: vessel surface area for backwash flow = ROUND(12 * comm_SA, 0)
+    vessel_sa = {
+      geom <- tolower(params$tank_geometry %||% "upright")
+      if (geom == "basin") {
+        bw <- as.numeric(contactor_results$basin_width  %||% params$basin_width  %||% 0)
+        bl <- as.numeric(contactor_results$basin_length %||% params$basin_length %||% 0)
+        if (bw > 0 && bl > 0) bw * bl else NULL
+      } else {
+        diam <- as.numeric(contactor_results$diameter %||% params$vessel_diameter %||% 0)
+        if (diam > 0) pi * (diam / 2)^2 else NULL
+      }
+    }
   )
   
   # Calculate piping and valves
-  # piping_results <- calculate_piping_valves(
-  #   num_contactors = contactor_results$total_contactors,
-  #   num_trains = params$num_trains,
-  #   automation_level = params$automation_level,
-  #   design_flow_mgd = design_flow_mgd,
-  #   component_level = 1, # Default to low-cost
-  #   no_backwash = params$no_backwash
-  # )
 
   piping_results <- calculate_piping_valves(
     num_contactors  = contactor_results$total_contactors,
@@ -807,7 +1459,7 @@ calculate_gac_system <- function(params) {
     num_contactors      = contactor_results$total_contactors,
     num_trains          = params$num_trains,
     manual_override     = params$manual_override,
-    ss_cat2             = params$ss_cat2            %||% 1,
+    ss_cat2             = ss_cat2_main,
     design_type         = params$design_type        %||% 1,
     add_on              = params$add_on             %||% 0,
     num_back_tanks      = tank_results$num_back_tanks        %||% 0,
@@ -866,7 +1518,47 @@ calculate_gac_system <- function(params) {
     total_contactors = contactor_results$total_contactors,
     design_flow = design_flow_mgd,
     tank_geometry = params$tank_geometry,
-    piping_length_lf = piping_results$piping_length_lf
+    # Workbook PPS row 77: build1_fp = ROUNDUP(IF(fp_required<10000, fp_required, vessel_fp), -1)
+    # fp_required (PPS row 76) = vessel_fp + back_tank_fp + pump_fp + office_fp
+    total_fp = {
+      d_m  <- as.numeric(contactor_results$diameter %||% params$vessel_diameter %||% 2)
+      n_m  <- contactor_results$total_contactors
+      sp_m <- min(d_m, if (design_flow_mgd < 1) 1 else 6)
+      vfp_m <- if (design_flow_mgd < 1)
+        ceiling((d_m+2*sp_m)^2 + (n_m-1)*(d_m+2*sp_m)*(d_m+sp_m/2))
+      else
+        ceiling((d_m+2*sp_m)^2 + (n_m-1)*(d_m+2*sp_m)*(d_m+sp_m))
+      if (design_flow_mgd < 1) {
+        vfp_m
+      } else {
+        wf_m    <- round(12 * pi * (d_m/2)^2, 0)
+        bv_m    <- wf_m * 10 / 7.48
+        # Workbook bt_diam: ROUNDUP(2*MAX((2*bt_cf/PI())^(1/3), (4*bt_cf/PI()/(14-2))^0.5), 0)
+        bt_d_m  <- ceiling(2 * max((2*bv_m/pi)^(1/3), sqrt(4*bv_m/pi/12)))
+        sp_bt_m <- min(bt_d_m, 6)
+        bt_fp_m <- ceiling((bt_d_m + 2*sp_bt_m)^2)
+        # pump_fp: actual booster + backwash pump footprints (pump_dim_table_cl, space_pumps_cust=4ft)
+        sp_p_m <- 4
+        booster_gpm_m <- min(design_flow_mgd * 1e6 / 1440 * 1.25, 35000)
+        pump_l_m <- if (booster_gpm_m <= 350) 2.5 else if (booster_gpm_m <= 1740) 3.75 else if (booster_gpm_m <= 7000) 5 else 7.083
+        boost_fp_m <- ceiling((pump_l_m+sp_p_m)*(pump_l_m+2*sp_p_m))
+        bpft_m   <- wf_m * 1.25
+        n_bop_m  <- max(1L, ceiling(bpft_m / 10000))
+        n_btot_m <- n_bop_m + 1L
+        bpr_m    <- bpft_m / n_bop_m
+        bpl_m    <- if (bpr_m <= 350) 2.5 else if (bpr_m <= 1740) 3.75 else if (bpr_m <= 7000) 5 else 7.083
+        back_pump_fp_m <- ceiling((bpl_m+sp_p_m)*(bpl_m+2*sp_p_m) + (n_btot_m-1)*(bpl_m+2*sp_p_m)*(bpl_m+sp_p_m))
+        pump_fp_m <- boost_fp_m + back_pump_fp_m
+        n_e_m   <- if      (design_flow_mgd <= 0.124)  1.0
+                   else if (design_flow_mgd <= 0.74)   1.2
+                   else if (design_flow_mgd <= 2.152)  1.6
+                   else if (design_flow_mgd <= 7.365)  2.8
+                   else if (design_flow_mgd <= 22.614) 3.8
+                   else 7.8
+        fp_req_m <- vfp_m + bt_fp_m + pump_fp_m + n_e_m * 100
+        if (fp_req_m >= 10000) vfp_m else fp_req_m
+      }
+    }
   )
   
   # Compile capital costs
@@ -906,6 +1598,12 @@ calculate_gac_system <- function(params) {
   )
   
   # Return comprehensive results
+  message(sprintf("[FINAL_PARAMS] vessel_diameter=%.4f | bed_depth=%.4f | vessel_height_length=%.4f | num_trains=%s | tank_geometry=%s",
+                  as.numeric(params$vessel_diameter %||% NA),
+                  as.numeric(params$bed_depth       %||% NA),
+                  as.numeric(params$vessel_height_length %||% NA),
+                  as.character(params$num_trains    %||% "NULL"),
+                  as.character(params$tank_geometry %||% "NULL")))
   list(
     success = TRUE,
     params = params,
@@ -1146,63 +1844,114 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
     
   } else {
     # ===== BASIN (GRAVITY) DESIGN =====
-    # Use WBS 1.2 - GAC Contact Basins (Concrete + Internals + Excavation + etc.)
-    
-    basin_area_sf <- basin_length * basin_width
-    total_basin_area <- basin_area_sf * total_contactors
-    total_basin_volume_cf <- actual_volume_cf * total_contactors
-    
-    message(sprintf("  Calling BASIN cost functions:"))
-    message(sprintf("    Basin area: %.2f sf per basin", basin_area_sf))
-    message(sprintf("    Total area: %.2f sf (%d basins)", total_basin_area, total_contactors))
-    message(sprintf("    Basin volume: %.2f cf per basin", actual_volume_cf))
-    
-    # 1.2.1 - Concrete basin structure
-    # Simplified: Use volume-based cost (would need full equation from Excel)
-    concrete_cost <- tryCatch({
-      # Placeholder - would call calculate_concrete_basin_cost()
-      total_basin_volume_cf * 45  # $/cf for concrete basin
-    }, error = function(e) {
-      total_basin_volume_cf * 45
-    })
-    
-    # 1.2.2 - Internals (Underdrain/Backwash System)
-    # Based on basin surface area
-    internals_cost <- tryCatch({
-      # Typical cost: $20-30 per square foot
-      total_basin_area * 25
-    }, error = function(e) {
-      total_basin_area * 25
-    })
-    
-    # 1.2.3 - Aluminum Railing
-    # Based on perimeter
-    basin_perimeter <- 2 * (basin_length + basin_width) * total_contactors
-    railing_cost <- basin_perimeter * 50  # $/LF
-    
-    # 1.2.4 - Aluminum Stairs
-    # Fixed cost per basin
-    stairs_cost <- total_contactors * 2500  # per basin
-    
-    # 1.2.5 - Excavation
-    # Based on volume excavated (basin volume + extra)
-    excavation_volume_cy <- (total_basin_volume_cf * 1.3) / 27  # cy, with 30% extra
-    excavation_cost <- excavation_volume_cy * 30  # $/cy
-    
-    # 1.2.6 - Backfill and Compaction
-    backfill_cost <- excavation_volume_cy * 18  # $/cy
-    
-    # Total basin cost
-    total_cost <- concrete_cost + internals_cost + railing_cost + 
+    # WBS 1.2 — GAC Contact Basins: Concrete, Internals, Railing, Stairs,
+    #           Excavation, Backfill.  All formulas from workbook:
+    #   CC rows 67-77  (quantities)
+    #   OUTPUT rows 45-50 (cost lookups)
+    #   Cost Data: conc_basin_cost_cl=$739.61/cy, excavate_cost_cl=$30.88/cy,
+    #              backfill_cost_cl=$18.65/cy, metal_cost_cl: railing=$44/lf stairs=$460/riser
+    #   CDA: overexcavate=4ft, conc_thick=1ft, risers=15 per basin, bed_expansion=0.5
+
+    # ── CDA constants ─────────────────────────────────────────────────────────
+    overexcavate   <- 4    # ft each side (CDA C47)
+    conc_thick     <- 1    # ft (CDA C48)
+    risers_per     <- 15   # risers per basin (CDA C46)
+    bed_expansion  <- 0.5  # CDA C11
+
+    # ── Geometry ──────────────────────────────────────────────────────────────
+    basin_area_sf        <- basin_length * basin_width          # sf per basin
+    basin_op_d           <- if (!is.null(basin_depth) && !is.na(basin_depth)) basin_depth else bed_depth
+    basin_depth_total    <- basin_op_d * (1 + bed_expansion) + 2  # total depth incl. freeboard (CDA basin_freeboard=2)
+    n                    <- total_contactors                    # total basins (op + NRD)
+
+    message(sprintf("  Calling BASIN cost functions (workbook formulas):"))
+    message(sprintf("    Basins: %d, L=%.1f ft, W=%.1f ft, op_depth=%.1f ft", n, basin_length, basin_width, basin_op_d))
+
+    # ── 1.2.1 Concrete volume (CC C73) ────────────────────────────────────────
+    # basin_conc_vol = (2*(W*n + t*(n+1))*D*t + (n+1)*L*D*t + (L+2t)*(W*n+t*(n+1))*t) / 27
+    # where D = total basin depth, t = conc_thick, n = total_num_basins, L = basin_length, W = basin_width
+    conc_vol_cy <- (
+      2 * (basin_width * n + conc_thick * (n + 1)) * basin_depth_total * conc_thick +
+      (n + 1) * basin_length * basin_depth_total * conc_thick +
+      (basin_length + 2 * conc_thick) * (basin_width * n + conc_thick * (n + 1)) * conc_thick
+    ) / 27
+    conc_uc     <- 739.6055887474795   # conc_basin_cost_cl col3 ($/cy)
+    concrete_cost <- conc_vol_cy * conc_uc
+
+    # ── 1.2.2 Internals (Underdrain/Backwash System) (OUTPUT C46, J46) ────────
+    # Cost = cont_int_eq evaluated at D = basin_area_sf (sf) per basin
+    # cont_int_eq = cont_bot_eq (1st cell underdrain) — workbook uses this for all basins
+    # cont_bot_eq: L=-5.629e-06, M=0.013916018, N=52.090398698, O=47002.723866153, range [0,1001]
+    # If basin_area > 1001 sf → "contact vendor" (returns NA); fall back to 0 (excluded)
+    cont_bot_cost_eq <- function(sa) {
+      if (is.na(sa) || sa <= 0) return(0)
+      if (sa > 1001) return(NA_real_)   # "contact vendor"
+      (-5.629e-06) * sa^3 + 0.013916018 * sa^2 + 52.090398698 * sa + 47002.723866153
+    }
+    # Backwash distribution (cont_top_eq): J*exp(K*D), D = basin_length (ft), range [0,30]
+    # cont_top_cost_cl: VLOOKUP(basin_length, cont_top_cost_cl, col) — step table with basin_length as key
+    # Values from Cost Data rows 193-205
+    cont_top_cost_table <- data.frame(
+      lo  = c(0,  9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31),
+      hi  = c(8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, NA),
+      uc  = c(56676.281085048, 59919.803195337, 63163.325305626, 79210.224167055,
+              83648.728107450, 107036.229639533, 112840.427100050, 126326.650611252,
+              130082.307791586, 160810.411994323, 185734.318736543, 192904.209717181, NA)
+    )
+    lookup_cont_top <- function(len) {
+      for (k in seq_len(nrow(cont_top_cost_table))) {
+        if (len >= cont_top_cost_table$lo[k] &&
+            (is.na(cont_top_cost_table$hi[k]) || len <= cont_top_cost_table$hi[k]))
+          return(cont_top_cost_table$uc[k])
+      }
+      NA_real_
+    }
+    bot_uc      <- cont_bot_cost_eq(basin_area_sf)
+    top_uc      <- lookup_cont_top(basin_length)
+    bot_uc_safe <- if (is.na(bot_uc)) 0 else bot_uc
+    top_uc_safe <- if (is.na(top_uc)) 0 else top_uc
+    internals_cost <- n * (bot_uc_safe + top_uc_safe)
+
+    # ── 1.2.3 Aluminum Railing (OUTPUT C47) ───────────────────────────────────
+    # railing = 2*(n*W + 2*t/2 + (n-1)*t) + 2*(L + 2*t/2)  [lf]  (CC C76 common-wall formula)
+    railing_lf    <- 2 * (n * basin_width + conc_thick + (n - 1) * conc_thick) +
+                     2 * (basin_length + conc_thick)
+    railing_uc    <- 44    # metal_cost_cl: Aluminum Railing = $44/lf
+    railing_cost  <- railing_lf * railing_uc
+
+    # ── 1.2.4 Aluminum Stairs (OUTPUT C48) ────────────────────────────────────
+    # quantity = risers (CDA C46 = 15) × total_num_basins
+    stairs_risers <- risers_per * n
+    stairs_uc     <- 460   # metal_cost_cl: Aluminum Stairs = $460/riser
+    stairs_cost   <- stairs_risers * stairs_uc
+
+    # ── 1.2.5 Excavation volume (CC C74) ──────────────────────────────────────
+    # excav_cy = ((n*W+(n+1)*t+oe)*(L+2t+oe)*(D+t+oe) + 0.5*3*(D+t+oe)^2*(L+2t+oe)) / 27
+    oe <- overexcavate; t <- conc_thick; D <- basin_depth_total; L <- basin_length; W <- basin_width
+    excav_cy <- (
+      (n * W + (n + 1) * t + oe) * (L + 2*t + oe) * (D + t + oe) +
+      0.5 * 3 * (D + t + oe)^2 * (L + 2*t + oe)
+    ) / 27
+    excavate_uc   <- 30.879999999999995   # excavate_cost_cl col3 ($/cy)
+    excavation_cost <- excav_cy * excavate_uc
+
+    # ── 1.2.6 Backfill volume (CC C75) ────────────────────────────────────────
+    # backfill_cy = excav_cy - (n*W+(n+1)*t)*(L+2t)*(D+t) / 27
+    backfill_cy  <- excav_cy - (n * W + (n + 1) * t) * (L + 2*t) * (D + t) / 27
+    backfill_uc  <- 18.65   # backfill_cost_cl col3 ($/cy)
+    backfill_cost <- backfill_cy * backfill_uc
+
+    # ── Total basin cost ───────────────────────────────────────────────────────
+    total_cost <- concrete_cost + internals_cost + railing_cost +
                   stairs_cost + excavation_cost + backfill_cost
-    unit_cost <- total_cost / total_contactors
-    
-    message(sprintf("    Concrete: $%.0f", concrete_cost))
-    message(sprintf("    Internals: $%.0f", internals_cost))
-    message(sprintf("    Railing: $%.0f", railing_cost))
-    message(sprintf("    Stairs: $%.0f", stairs_cost))
-    message(sprintf("    Excavation: $%.0f", excavation_cost))
-    message(sprintf("    Backfill: $%.0f", backfill_cost))
+    unit_cost  <- total_cost / max(1, n)
+
+    message(sprintf("    Concrete:   %.2f cy × $%.2f = $%.0f", conc_vol_cy,  conc_uc,     concrete_cost))
+    message(sprintf("    Internals:  %d × ($%.0f bot + $%.0f top) = $%.0f", n, bot_uc_safe, top_uc_safe, internals_cost))
+    message(sprintf("    Railing:    %.1f lf × $%.0f = $%.0f", railing_lf, railing_uc, railing_cost))
+    message(sprintf("    Stairs:     %d risers × $%.0f = $%.0f", stairs_risers, stairs_uc, stairs_cost))
+    message(sprintf("    Excavation: %.2f cy × $%.2f = $%.0f", excav_cy,    excavate_uc, excavation_cost))
+    message(sprintf("    Backfill:   %.2f cy × $%.2f = $%.0f", backfill_cy, backfill_uc, backfill_cost))
   }
   
   message(sprintf("Unit cost: $%.0f", unit_cost))
@@ -1769,6 +2518,10 @@ calculate_pumps <- function(design_flow, num_trains, service_pumps, backwash_pum
     service_cost      = booster_cost,
     backwash_cost     = back_cost,
     residuals_cost    = res_cost,
+    # Aliases used by calculate_om_costs for maintenance materials (O&M rows 369-371)
+    booster_pump_tc   = booster_cost,
+    backwash_pump_tc  = back_cost,
+    res_pump_tc       = res_cost,
     total_cost        = total_cost
   )
 }
@@ -1776,7 +2529,8 @@ calculate_pumps <- function(design_flow, num_trains, service_pumps, backwash_pum
 #' Calculate tank requirements
 calculate_tanks <- function(design_flow, no_backwash, no_backwash_tank,
                            backwash_interval, residuals_disposal, residuals_tank,
-                           num_contactors = 1, component_level = 1) {
+                           num_contactors = 1, component_level = 1,
+                           vessel_sa = NULL) {
   
   # Ensure numeric parameters
   design_flow <- safe_as_numeric(design_flow, 0)
@@ -1789,23 +2543,40 @@ calculate_tanks <- function(design_flow, no_backwash, no_backwash_tank,
   residuals_tank <- safe_as_char(residuals_tank, "no holding tank")
   
   # IMPORTANT: For small systems (< 0.5 MGD), Excel defaults to no backwash
-  # This matches Excel's logic: IF(ss_cat2=1, 1, "") where ss_cat2=1 means small
-  if (design_flow < 0.5 && !isTRUE(no_backwash)) {
-    # Auto-set no_backwash for small systems unless explicitly enabled
-    # Check if backwash was explicitly requested
-    no_backwash <- TRUE
+  # Workbook B&R C9 (no_backwash) and C10 (no_back_tank):
+  # Default = 1 (use existing pumps/storage) when ss_cat2=1 (design_flow < 1 MGD).
+  # For medium/large systems the workbook leaves these blank (user-controlled).
+  # We map ss_cat2=1 → no_backwash/no_backwash_tank = TRUE as the workbook default.
+  ss_cat2_tanks <- if (design_flow < 1) 1L else if (design_flow <= 10) 2L else 3L
+  if (ss_cat2_tanks == 1L && !isTRUE(no_backwash)) {
+    no_backwash      <- TRUE
     no_backwash_tank <- TRUE
-    message("Small system (<0.5 MGD): Auto-disabling backwash tanks per Excel logic")
-  }
-  
-  # For medium systems (0.5-10 MGD), backwash tank still not needed by default
-  # Excel: IF(ss_cat2=2, "", 1) means medium systems also default to no tank
-  if (design_flow >= 0.5 && design_flow <= 10 && !isTRUE(no_backwash_tank)) {
-    no_backwash_tank <- TRUE
-    message("Medium system (0.5-10 MGD): Auto-disabling backwash storage per Excel logic")
+    message("Small system (<1 MGD): defaulting no_backwash=TRUE per workbook B&R C9/C10")
   }
   
   # ===== BACKWASH TANK SIZING =====
+  # Workbook B&R formulas:
+  #   water_flush     = ROUND(h2oflush_backwash_rate * comm_SA, 0)  [12 gpm/ft²]
+  #   total_backwash  = water_flush * backwash_time                  [10 min]
+  #   back_multiplier = 1                                            [CDA C63]
+  #   back_tank_vol   = total_backwash * back_multiplier / num_back_tanks
+  
+  # Backwash flow: 12 gpm/ft² × vessel surface area
+  # vessel_sa is π*(d/2)² for upright vessels (comm_SA from Contactor Constraints)
+  h2oflush_rate  <- 12      # gpm/ft² (CDA C61)
+  backwash_time  <- 10      # minutes (CDA C62)
+  back_multiplier <- 1      # storage cycles (CDA C63)
+  
+  # Compute water_flush from vessel_sa if provided, else fall back to flow-based estimate
+  water_flush <- if (!is.null(vessel_sa) && is.numeric(vessel_sa) && vessel_sa > 0) {
+    round(h2oflush_rate * vessel_sa, 0)
+  } else {
+    # Fallback: estimate from design flow (used when vessel_sa not available)
+    design_flow_gpm <- design_flow * 1e6 / 1440
+    round(h2oflush_rate * (design_flow_gpm / num_contactors / 2), 0)  # rough SA estimate
+  }
+  
+  total_backwash <- water_flush * backwash_time  # gallons
   
   backwash_tank_cost <- 0
   backwash_tank_volume <- 0
@@ -1813,49 +2584,17 @@ calculate_tanks <- function(design_flow, no_backwash, no_backwash_tank,
   
   if (!no_backwash && !no_backwash_tank) {
     
-    # Calculate backwash volume based on GAC BED VOLUME, not daily flow
-    # Backwash expands the bed by ~30% and needs to be stored
+    # Number of tanks = ROUNDUP(total_backwash * back_multiplier / max_back_tank_size, 0)
+    # max_back_tank_size from workbook = 289,000 gal (from st_bwt_cost_cl lookup)
+    max_back_tank_size <- 289000
     
-    # Get GAC bed volume from contactors (passed as parameter)
-    # If not available, estimate from design flow
-    gac_bed_volume_cf <- if (!is.null(num_contactors) && num_contactors > 0) {
-      # Estimate bed volume per contactor (simplified)
-      # For 0.03 MGD with 2 contactors: ~10 cf each
-      bed_volume_per_contactor <- (design_flow * 1000000 / 1440) * 7.5 / 7.48052 / num_contactors
-      bed_volume_per_contactor * num_contactors
-    } else {
-      # Fallback estimate
-      (design_flow * 1000000 / 1440) * 7.5 / 7.48052
-    }
+    num_backwash_tanks <- max(1L, ceiling(total_backwash * back_multiplier / max_back_tank_size))
+    backwash_tank_volume <- total_backwash * back_multiplier / num_backwash_tanks
     
-    # Backwash volume = bed volume × expansion factor (1.3) × number of contactors
-    # Plus safety factor for multiple cycles
-    backwash_volume_per_cycle_gal <- gac_bed_volume_cf * 7.48052 * 1.3  # 30% expansion
-    
-    # Storage for multiple cycles between maintenance
-    # Typically 2-3 cycles worth of storage
-    num_cycles_stored <- 2
-    
-    total_backwash_gal <- backwash_volume_per_cycle_gal * num_cycles_stored
-    
-    # Backwash storage multiplier (safety factor)
-    back_multiplier <- 1.2  # Reduced from 1.5
-    
-    # Max tank size (10,000 gallons for small systems)
-    max_tank_size <- if (design_flow < 1) 10000 else 15000
-    
-    # Calculate number of tanks needed
-    num_backwash_tanks <- ceiling(total_backwash_gal * back_multiplier / max_tank_size)
-    num_backwash_tanks <- max(1, num_backwash_tanks)
-    
-    # Volume per tank
-    backwash_tank_volume <- (total_backwash_gal * back_multiplier) / num_backwash_tanks
-    
-    message(sprintf("Backwash tank sizing:"))
-    message(sprintf("  GAC bed volume: %.1f cf", gac_bed_volume_cf))
-    message(sprintf("  Backwash per cycle: %.0f gal", backwash_volume_per_cycle_gal))
-    message(sprintf("  Total storage: %.0f gal", total_backwash_gal * back_multiplier))
-    message(sprintf("  Tank volume: %.0f gal", backwash_tank_volume))
+    message(sprintf("Backwash tank sizing (workbook method):"))
+    message(sprintf("  water_flush: %.0f gpm (12 gpm/ft² × %.2f ft² vessel SA)", water_flush, vessel_sa %||% 0))
+    message(sprintf("  total_backwash: %.0f gal (%d min)", total_backwash, backwash_time))
+    message(sprintf("  back_tank_vol: %.0f gal", backwash_tank_volume))
     
     # Calculate cost using Excel methodology
     # Default to steel tanks
@@ -2013,257 +2752,6 @@ lookup_pipe_diameter <- function(flow_gpm) {
   pipe_size_table$diameter[idx]
 }
 
-#' Calculate piping and valve costs
-# calculate_piping_valves <- function(num_contactors, num_trains, automation_level, design_flow_mgd = 1, component_level = 1, no_backwash = FALSE) {
-  
-#   # Ensure numeric parameters
-#   num_contactors <- safe_as_numeric(num_contactors, 1)
-#   num_trains <- safe_as_numeric(num_trains, 1)
-#   design_flow_mgd <- safe_as_numeric(design_flow_mgd, 1)
-  
-#   # ===== PIPE SIZING AND COSTING =====
-  
-#   # Estimate facility length (typical spacing between equipment)
-#   facility_length <- if (design_flow_mgd < 0.5) {
-#     10  # Small systems: 10 ft 
-#   } else if (design_flow_mgd < 2) {
-#     20  # Medium systems: 20 ft
-#   } else {
-#     30  # Large systems: 30 ft
-#   }
-  
-#   # Calculate pipe diameter based on flow
-#   # Simplified: use 2 ft/sec velocity
-#   # Q (gpm) = 694.4 × D² × V
-#   # D = sqrt(Q / (694.4 × 2))
-#   flow_gpm <- design_flow_mgd * 694.4  # Convert MGD to GPM
-#   pipe_diameter <- sqrt(flow_gpm / (694.4 * 2))  # inches
-#   pipe_diameter <- max(2, min(24, pipe_diameter))  # Constrain to 2-24 inches
-  
-#   # Round to standard pipe sizes
-#   standard_sizes <- c(2, 3, 4, 6, 8, 10, 12, 14, 16, 18, 20, 24)
-#   pipe_diameter <- standard_sizes[which.min(abs(standard_sizes - pipe_diameter))]
-  
-#   # Calculate piping lengths for different sections
-#   # Excel multipliers (from Piping sheet):
-#   # proc_pipe_mult = 2
-#   # back_pipe_mult = 2.5
-#   # in_out_pipe_mult = 2
-#   # res_pipe_mult = 1
-  
-#   # Process piping: multiplier × facility length
-#   proc_pipe_mult <- 2.0  # Excel value
-#   proc_pipe_length <- proc_pipe_mult * facility_length
-  
-#   # Backwash piping: multiplier × facility length
-#   back_pipe_mult <- 2.5  # Excel value
-#   back_pipe_length <- back_pipe_mult * facility_length
-  
-#   # Influent/Effluent piping: multiplier × facility length
-#   in_out_pipe_mult <- 2.0  # Excel value
-#   in_out_pipe_length <- in_out_pipe_mult * facility_length
-  
-#   # Residuals piping: base + add-on
-#   res_pipe_mult <- 1.0
-#   res_pipe_base <- res_pipe_mult * facility_length
-#   # Add-on for residuals line (scales with system size)
-#   res_pipe_addon <- if (design_flow_mgd < 0.5) {
-#     40  # Small systems
-#   } else if (design_flow_mgd < 2) {
-#     60
-#   } else {
-#     80
-#   }
-#   res_pipe_length <- res_pipe_base + res_pipe_addon
-  
-#   # Total piping length
-#   total_pipe_length <- proc_pipe_length + back_pipe_length + in_out_pipe_length + res_pipe_length
-  
-#   message(sprintf("Piping lengths: Process=%d, Backwash=%d, In/Out=%d, Residuals=%d, Total=%d LF",
-#                   proc_pipe_length, back_pipe_length, in_out_pipe_length, res_pipe_length, total_pipe_length))
-  
-#   # Calculate piping costs using Excel equations
-#   # Material selection based on system size (matching Excel logic)
-#   # Small systems: All PVC (cheapest)
-#   # Large systems: DI for mains, PVC for process
-  
-#   use_all_pvc <- design_flow_mgd < 1.0  # Small systems use all PVC
-  
-#   piping_cost_result <- tryCatch({
-    
-#     # Process piping - always PVC for small/medium systems
-#     proc_material <- if (design_flow_mgd < 2.0) "PVC" else "CPVC"
-#     proc_cost <- calculate_piping_cost(
-#       diameter = pipe_diameter,
-#       length = proc_pipe_length,
-#       material = proc_material,
-#       component_level = component_level
-#     )
-    
-#     # Backwash piping - always PVC
-#     back_cost <- calculate_piping_cost(
-#       diameter = pipe_diameter,
-#       length = back_pipe_length,
-#       material = "PVC",
-#       component_level = component_level
-#     )
-    
-#     # Influent/Effluent piping - PVC for small, DI for large
-#     in_out_material <- if (use_all_pvc) "PVC" else "DI"
-#     in_out_cost <- calculate_piping_cost(
-#       diameter = pipe_diameter,
-#       length = in_out_pipe_length,
-#       material = in_out_material,
-#       component_level = component_level
-#     )
-    
-#     list(
-#       proc_cost = proc_cost$total_cost,
-#       back_cost = back_cost$total_cost,
-#       in_out_cost = in_out_cost$total_cost,
-#       total_cost = proc_cost$total_cost + back_cost$total_cost + in_out_cost$total_cost,
-#       message = "OK"
-#     )
-    
-#   }, error = function(e) {
-#     warning("Using fallback piping cost: ", e$message)
-#     # Fallback: $100/LF average
-#     list(
-#       proc_cost = proc_pipe_length * 100,
-#       back_cost = back_pipe_length * 100,
-#       in_out_cost = in_out_pipe_length * 100,
-#       total_cost = total_pipe_length * 100,
-#       message = "Fallback calculation"
-#     )
-#   })
-  
-#   piping_cost <- piping_cost_result$total_cost
-  
-#   # ===== PIPING INSTALLATION COSTS (WBS 3.4) =====
-#   # Excel includes excavation, bedding, backfill, and thrust blocks with piping
-  
-#   # 3.4.2 - Excavation (cy)
-#   # Trench volume: length × width × depth / 27
-#   # Typical trench: 2 ft wide × 3 ft deep
-#   excavation_cy <- (total_pipe_length * 2 * 3) / 27
-#   excavation_cost <- excavation_cy * 31  # $31/cy from Excel
-  
-#   # 3.4.3 - Bedding (cy)
-#   # Sand/gravel bed under pipe: ~6 inches deep
-#   bedding_cy <- (total_pipe_length * 2 * 0.5) / 27
-#   bedding_cost <- bedding_cy * 45  # $45/cy from Excel
-  
-#   # 3.4.5 - Backfill and Compaction (cy)
-#   # Same volume as excavation
-#   backfill_cy <- excavation_cy
-#   backfill_cost <- backfill_cy * 19  # $19/cy from Excel
-  
-#   # 3.4.6 - Thrust Blocks (cy)
-#   # Concrete thrust blocks at bends/tees
-#   # Estimate: 1 per 100 LF of piping
-#   num_thrust_blocks <- total_pipe_length / 100
-#   thrust_block_cy <- num_thrust_blocks * 0.5  # 0.5 cy each
-#   thrust_block_cost <- thrust_block_cy * 740  # $740/cy from Excel
-  
-#   # Total piping installation costs
-#   piping_installation_cost <- excavation_cost + bedding_cost + backfill_cost + thrust_block_cost
-  
-#   message(sprintf("Piping installation costs:"))
-#   message(sprintf("  Excavation: %.1f cy @ $31 = $%.0f", excavation_cy, excavation_cost))
-#   message(sprintf("  Bedding: %.1f cy @ $45 = $%.0f", bedding_cy, bedding_cost))
-#   message(sprintf("  Backfill: %.1f cy @ $19 = $%.0f", backfill_cy, backfill_cost))
-#   message(sprintf("  Thrust blocks: %.2f cy @ $740 = $%.0f", thrust_block_cy, thrust_block_cost))
-#   message(sprintf("  Total installation: $%.0f", piping_installation_cost))
-  
-#   # Total piping costs = material + installation
-#   total_piping_cost <- piping_cost + piping_installation_cost
-  
-#   # ===== VALVE SIZING AND COSTING =====
-  
-#   # Valve size typically matches pipe diameter
-#   valve_size <- pipe_diameter
-  
-#   # Calculate valve costs using Excel equations
-#   valve_cost_result <- tryCatch({
-#     calculate_system_valve_costs(
-#       num_contactors = num_contactors,
-#       num_trains = num_trains,
-#       valve_size = valve_size,
-#       component_level = component_level,
-#       design_flow_mgd = design_flow_mgd,
-#       no_backwash = no_backwash
-#     )
-#   }, error = function(e) {
-#     warning("Using fallback valve cost: ", e$message)
-#     # Fallback: $2000 per valve
-#     num_valves <- num_contactors * 4
-#     list(
-#       total_cost = num_valves * 2000,
-#       mov_cost = num_valves * 2000 * 0.6,
-#       mov_quantity = num_valves,
-#       chv_cost = num_valves * 2000 * 0.2,
-#       chv_quantity = num_trains,
-#       bfv_cost = num_valves * 2000 * 0.2,
-#       bfv_quantity = num_trains * 2,
-#       message = "Fallback calculation"
-#     )
-#   })
-  
-#   valve_cost <- valve_cost_result$total_cost
-  
-#   # ===== TOTAL COST =====
-  
-#   total_cost <- total_piping_cost + valve_cost
-  
-#   # Return detailed results
-#   list(
-#     # Piping material
-#     piping_material_cost = piping_cost,
-#     piping_length_lf = total_pipe_length,
-#     pipe_diameter = pipe_diameter,
-#     proc_pipe_length = proc_pipe_length,
-#     back_pipe_length = back_pipe_length,
-#     in_out_pipe_length = in_out_pipe_length,
-    
-#     # Piping installation
-#     excavation_cost = excavation_cost,
-#     bedding_cost = bedding_cost,
-#     backfill_cost = backfill_cost,
-#     thrust_block_cost = thrust_block_cost,
-#     piping_installation_cost = piping_installation_cost,
-    
-#     # Total piping
-#     piping_cost = total_piping_cost,
-    
-#     # Valves
-#     valve_cost = valve_cost,
-#     num_valves = valve_cost_result$mov_quantity + 
-#                  valve_cost_result$chv_quantity + 
-#                  valve_cost_result$bfv_quantity,
-#     mov_cost = valve_cost_result$mov_cost,
-#     mov_quantity = valve_cost_result$mov_quantity,
-#     chv_cost = valve_cost_result$chv_cost,
-#     chv_quantity = valve_cost_result$chv_quantity,
-#     bfv_cost = valve_cost_result$bfv_cost,
-#     bfv_quantity = valve_cost_result$bfv_quantity,
-    
-#     # Total
-#     total_cost = total_cost,
-    
-#     # Breakdown for output_db
-#     breakdown = data.frame(
-#       Item = c("Process Piping", "Backwash Piping", "In/Out Piping", 
-#                "Motor Operated Valves", "Check Valves", "Butterfly Valves"),
-#       Quantity = c(proc_pipe_length, back_pipe_length, in_out_pipe_length,
-#                    valve_cost_result$mov_quantity, valve_cost_result$chv_quantity, 
-#                    valve_cost_result$bfv_quantity),
-#       Unit = c("LF", "LF", "LF", "EA", "EA", "EA"),
-#       Cost = c(piping_cost_result$proc_cost, piping_cost_result$back_cost, 
-#                piping_cost_result$in_out_cost, valve_cost_result$mov_cost,
-#                valve_cost_result$chv_cost, valve_cost_result$bfv_cost)
-#     )
-#   )
-# }
 
 #' Calculate piping and valve costs
 #' Mirrors workbook "Pumps Pipe Structure" sheet logic:
@@ -2284,33 +2772,90 @@ calculate_piping_valves <- function(num_contactors, num_trains, automation_level
   design_flow_mgd <- safe_as_numeric(design_flow_mgd, 1)
 
   # ── 1. Facility length (facil_length) ─────────────────────────────────────
-  # Workbook: facil_length = ROUNDUP(SQRT(total_fp), -1) = 10 ft for small systems
-  # If not provided, estimate from flow (matches workbook defaults)
+  # Workbook PPS C81: facil_length = ROUNDUP(SQRT(total_fp), -1)
+  # total_fp = build1_fp + build2_fp
+  # build1_fp = ROUNDUP(IF(fp_required < 10000, fp_required, vessel_fp), -1)
+  # fp_required = vessel_fp + back_tank_fp + pump_fp + office_fp
+  # space_vessels: MIN(d, 1ft) for ss_cat2=1 (pre-engineered skid, max_space_vessels_pre=1)
+  #                MIN(d, 6ft) for ss_cat2>=2 (custom, max_space_vessels_cust=6)
+  # small systems (ss_cat2=1): back_tank/pump/office fp all = 0
   if (is.null(facil_length) || is.na(facil_length)) {
-    facil_length <- if (design_flow_mgd < 0.5) {
-      10   # ROUNDUP(sqrt(26 sf), -1) = 10 ft  (workbook default)
-    } else if (design_flow_mgd < 2) {
-      20
+    if (!is.null(vessel_diameter) && !is.na(vessel_diameter) && vessel_diameter > 0 &&
+        !is.null(num_contactors) && num_contactors > 0) {
+      d_fl   <- as.numeric(vessel_diameter)
+      n_fl   <- as.integer(num_contactors)
+      small  <- design_flow_mgd < 1   # ss_cat2 = 1
+      max_sp <- if (small) 1 else 6   # max_space_vessels_pre vs _cust  (CDA C159 vs C158)
+      sp_fl  <- min(d_fl, max_sp)
+      # PPS row 59 (skid ss_cat2=1): spacing = sp/2 between vessels
+      # PPS row 58 (custom ss_cat2>=2): spacing = sp
+      vfp_fl <- if (small) {
+        ceiling((d_fl+2*sp_fl)^2 + (n_fl-1)*(d_fl+2*sp_fl)*(d_fl+sp_fl/2))
+      } else {
+        ceiling((d_fl+2*sp_fl)^2 + (n_fl-1)*(d_fl+2*sp_fl)*(d_fl+sp_fl))
+      }
+      if (small) {
+        # ss_cat2=1: no_backwash=TRUE so bt_fp=0; space_office_small=0; no booster
+        fp_req_fl <- vfp_fl
+      } else {
+        # back_tank_fp: cylindrical tank for back_vol = ROUND(12×comm_SA,0) × 10 min
+        comm_SA_fl   <- pi * (d_fl / 2)^2
+        wf_fl        <- round(12 * comm_SA_fl, 0)
+        bv_fl        <- wf_fl * 10 / 7.48              # ft³
+        bt_d_fl      <- ceiling(2 * max((2*bv_fl/pi)^(1/3), sqrt(4*bv_fl/pi/12)))
+        sp_bt_fl     <- min(bt_d_fl, 6)
+        bt_fp_fl     <- ceiling((bt_d_fl + 2*sp_bt_fl)^2)
+        # office_fp: labor_table_cl col 3 × space_office = n_operators × 100 sf
+        n_emp_fl     <- if      (design_flow_mgd <= 0.124)  1.0
+                        else if (design_flow_mgd <= 0.74)   1.2
+                        else if (design_flow_mgd <= 2.152)  1.6
+                        else if (design_flow_mgd <= 7.365)  2.8
+                        else if (design_flow_mgd <= 22.614) 3.8
+                        else                                7.8
+        office_fp_fl <- n_emp_fl * 100
+        # pump_fp: actual booster + backwash pump footprints (pump_dim_table_cl, space_pumps_cust=4ft)
+        # pump_dim_table_cl: ≤350gpm→2.5ft sq, ≤1740→3.75ft, ≤7000→5ft, >7000→7.083ft
+        sp_p_fl      <- 4
+        booster_gpm_fl <- min(design_flow_mgd * 1e6 / 1440 * 1.25, 35000)
+        pump_l_fl    <- if (booster_gpm_fl <= 350) 2.5 else if (booster_gpm_fl <= 1740) 3.75 else if (booster_gpm_fl <= 7000) 5 else 7.083
+        boost_fp_fl  <- ceiling((pump_l_fl + sp_p_fl) * (pump_l_fl + 2*sp_p_fl))
+        bpft_fl      <- wf_fl * 1.25
+        n_bop_fl     <- max(1L, ceiling(bpft_fl / 10000))
+        n_btot_fl    <- n_bop_fl + 1L
+        bpr_fl       <- bpft_fl / n_bop_fl
+        bpl_fl       <- if (bpr_fl <= 350) 2.5 else if (bpr_fl <= 1740) 3.75 else if (bpr_fl <= 7000) 5 else 7.083
+        back_pump_fp_fl <- ceiling((bpl_fl+sp_p_fl)*(bpl_fl+2*sp_p_fl) + (n_btot_fl-1)*(bpl_fl+2*sp_p_fl)*(bpl_fl+sp_p_fl))
+        pump_fp_fl   <- boost_fp_fl + back_pump_fp_fl
+        fp_req_fl    <- vfp_fl + bt_fp_fl + pump_fp_fl + office_fp_fl
+      }
+      if (fp_req_fl >= 10000) {
+        build1_fl <- ceiling(vfp_fl / 10) * 10
+        build2_fl <- ceiling((fp_req_fl - vfp_fl) / 10) * 10
+      } else {
+        build1_fl <- ceiling(fp_req_fl / 10) * 10
+        build2_fl <- 0L
+      }
+      facil_length <- max(10L, ceiling(sqrt(build1_fl + build2_fl) / 10) * 10)
     } else {
-      30
+      facil_length <- if (design_flow_mgd < 0.5) 10L else if (design_flow_mgd < 2) 20L else 30L
     }
   }
 
  # ── 2. Per-section flows ───────────────────────────────────────────────────
 # Workbook:
 #   in_out_pipe_flow = design_flow_rate  (total flow, gpm)
-#   proc_pipe_flow   = flow_per_vessel   (flow per single train/vessel)
+#   proc_pipe_flow   = flow_per_vessel   = comm_SA * bed_depth * 7.48052 / EBCT_tank
+#                      (Contactor Constraints C31 / PPS C26)
 #   back_pipe_flow   = water_flush       = ROUND(h2oflush_backwash_rate * comm_SA, 0)
 #                      where comm_SA = pi*(vessel_diameter/2)^2  (upright)
 #                                    = vessel_diameter * vessel_length  (horizontal)
 
   design_flow_gpm <- design_flow_mgd * 1e6 / 1440
 
-  in_out_flow_gpm <- design_flow_gpm                       # total flow
-  proc_flow_gpm   <- design_flow_gpm / max(1, num_trains)  # per vessel
+  in_out_flow_gpm <- design_flow_gpm   # total flow (PPS C23)
 
   # Backwash flow: h2oflush_backwash_rate (12 gpm/ft²) × surface area of ONE vessel
-  h2oflush_backwash_rate <- 12  # gpm/ft² — constant from Critical Design Assumptions C61
+  h2oflush_backwash_rate <- 12  # gpm/ft² — CDA C61
 
   comm_SA <- if (!is.null(vessel_diameter) && !is.na(vessel_diameter)) {
     if (tolower(tank_geometry) == "horizontal") {
@@ -2319,11 +2864,27 @@ calculate_piping_valves <- function(num_contactors, num_trains, automation_level
       pi * (vessel_diameter / 2)^2      # upright: π r²
     }
   } else {
-    # fallback: back-calculate from proc_flow at typical HLR
-    proc_flow_gpm / 5   # ~5 gpm/ft² typical surface loading
+    # fallback: back-calculate from flow at typical HLR
+    design_flow_gpm / max(1, num_trains) / 5
   }
 
   back_flow_gpm <- round(h2oflush_backwash_rate * comm_SA, 0)
+
+  # proc_pipe_flow = flow_per_vessel = comm_SA * bed_depth * 7.48052 / EBCT_tank
+  # Requires bed_depth and ebct_per_vessel. Pull from params if available;
+  # fall back to flow/trains if neither is provided.
+  bed_depth_pv   <- safe_as_numeric(params$bed_depth %||% NULL, NA_real_)
+  num_series_pv  <- safe_as_numeric(params$num_contactors_in_series %||% 1, 1)
+  ebct_pv        <- safe_as_numeric(params$ebct %||% NULL, NA_real_)
+
+  proc_flow_gpm <- if (!is.na(bed_depth_pv) && !is.na(ebct_pv) &&
+                        bed_depth_pv > 0 && ebct_pv > 0 &&
+                        tolower(tank_geometry) != "basin") {
+    ebct_per_vessel <- ebct_pv / max(1, num_series_pv)
+    comm_SA * bed_depth_pv * 7.48052 / ebct_per_vessel   # CC C31 / PPS C26
+  } else {
+    design_flow_gpm / max(1, num_trains)   # fallback for basin or missing dims
+  }
 
   # ── 3. Per-section diameters via VLOOKUP ──────────────────────────────────
   in_out_pipe_diam <- lookup_pipe_diameter(in_out_flow_gpm)
@@ -2528,7 +3089,8 @@ calculate_piping_valves <- function(num_contactors, num_trains, automation_level
       res_pumps      = tanks$residuals_pumps  %||% 0,
       res_hold_tanks = (tanks$num_residuals_tanks %||% 0) +
                        (tanks$num_residuals_basins %||% 0),
-      res_pipe_diam  = res_pipe_diam
+      res_pipe_diam  = res_pipe_diam,
+      num_contactors_in_series = safe_as_numeric(params$num_contactors_in_series %||% 1, 1)
     )
   }, error = function(e) {
     warning("Using fallback valve cost: ", e$message)
@@ -3048,7 +3610,8 @@ calculate_controls <- function(automation_level, num_contactors, num_trains, man
 #' Calculate site and building costs
 calculate_site_buildings <- function(include_buildings, include_hvac, include_land,
                                     retrofit, total_contactors, design_flow = 0.03,
-                                    tank_geometry = "upright", piping_length_lf = 0) {
+                                    tank_geometry = "upright", piping_length_lf = 0,
+                                    total_fp = NULL) {  # optional: actual basin footprint (sf)
   
   # Ensure numeric parameters
   total_contactors <- safe_as_numeric(total_contactors, 1)
@@ -3069,58 +3632,41 @@ calculate_site_buildings <- function(include_buildings, include_hvac, include_la
   #   (include_pad=1 by default per Sheet7 row 109)
   # Note: building_footprint_sf is assigned below after this block
 
-  # For small systems: shed footprint = 30 sf (workbook default for 0.03 MGD)
-  # For larger systems: rough proxy from flow (workbook would compute from vessel dimensions)
-  build1_fp_est <- if (design_flow < 0.5 && !retrofit) {
+  # building_footprint_sf drives sitework ($15.19/sf) and land cost.
+  # Workbook: build1_fp = ROUNDUP(vessel_fp + pump_fp + tank_fp, -1).
+  # When total_fp is supplied (gravity AutoSize loop passes actual basin footprint),
+  # use it directly. Otherwise use a flow-based proxy for the main calculation path.
+  build1_fp_est <- if (!is.null(total_fp) && is.numeric(total_fp) && total_fp > 0) {
+    ceiling(total_fp / 10) * 10   # ROUNDUP(total_fp, -1)
+  } else if (design_flow < 0.5 && !retrofit) {
     30
   } else {
     max(30, round(design_flow * 2000))
   }
 
-  # bldg_shed_cost_cl: uc = $50.7423/sf for fp < 500 sf
   shed_uc <- 50.742289444355997
   concrete_pad_uc <- 492.74999999999994
 
   building_cost <- if (!retrofit) {
-    if (build1_fp_est < 500) {
-      # Small shed + concrete pad (workbook rows 277 + 314)
-      build1_fp_est * shed_uc + concrete_pad_uc
-    } else {
-      # Larger building: low/mid/high quality cost equations (not yet implemented)
-      # Placeholder: shed formula scaled — will be replaced with polynomial equations
-      build1_fp_est * shed_uc + concrete_pad_uc
-    }
+    build1_fp_est * shed_uc + concrete_pad_uc
   } else 0
-  
-  
-  # Concrete pad: workbook row 314: qty=1 unit × $492.75 for non-retrofit small systems
-  # (include_pad=1 default per Sheet7 row 109; already included in building_cost above)
+
   concrete_pad_qty <- if (design_flow < 0.5 && !retrofit) 1 else 0
 
-  # Workbook: tech_fp = total_fp + sept_fp + ep_fp + solids_pad_area
-  # For GAC app: sept_fp = ep_fp = solids_pad_area = 0; total_fp = build1_fp + build2_fp
-  # build1_fp drives building footprint so we use building_footprint_sf as proxy
-  # Estimate building footprint from design flow (consistent with shed/building sizing above)
-  # building_footprint_sf: use same estimate as used for building cost above
   building_footprint_sf <- build1_fp_est
 
-  # Land cost: land_required × VLOOKUP(design_flow, land_cost_cl, 3)
-  # land_required: ROUNDUP(((fp^0.5 + 2*10) × (fp^0.5 + 10 + 40)) / 43560, 2) acres
-  # non_fire_buffer = 10 ft, fire_buffer = 40 ft (CDA Sheet5 defaults)
-  # land_cost_cl ($/acre, MGD breakpoints from Sheet23):
+  # Land cost
   {
     bps <- c(0, 0.031, 0.1241, 0.3051, 0.741, 2.1521, 7.3651, 22.6141)
     rts <- c(21165.71, 20660.02, 16458.50, 19327.22, 31219.85, 68950.85, 129311.24, 262816.68)
     idx <- max(1L, min(findInterval(design_flow, bps), length(rts)))
     land_cost_per_acre_site <- rts[idx]
   }
-  # Workbook Sheet11 row83: ROUNDUP(raw_sqft, -2) / 43560
   land_req_site <- ceiling(
     ((building_footprint_sf^0.5 + 20) * (building_footprint_sf^0.5 + 50)) / 100
   ) * 100 / 43560
   land_cost <- if (include_land) land_req_site * land_cost_per_acre_site else 0
 
-  # sitework_cost per workbook: tech_fp * sitework_sf_cl ($15.19/sf)
   sitework_sf_cl   <- 15.191208791208791
   sitework_cost_wb <- building_footprint_sf * sitework_sf_cl
 
@@ -3624,9 +4170,9 @@ calculate_om_costs <- function(
   # O&M row 13: tot_inst_maint = all instruments for PM (adds backwash FM)
   tot_inst_maint <- tot_inst + tot_fm_bw
 
-  booster_pumps  <- safe_n(pump_results$num_booster_pumps,  0)
-  backwash_pumps <- safe_n(pump_results$num_backwash_pumps, 0)
-  res_pumps      <- safe_n(pump_results$num_residuals_pumps, 0)
+  booster_pumps  <- safe_n(pump_results$booster_pumps,   0)
+  backwash_pumps <- safe_n(pump_results$backwash_pumps,  0)
+  res_pumps      <- safe_n(pump_results$residuals_pumps, 0)
   tot_pumps      <- booster_pumps
   # PM pumps: large, frequently operated only (backwash if interval <= 1 week)
   tot_pumps_maint <- booster_pumps + res_pumps +

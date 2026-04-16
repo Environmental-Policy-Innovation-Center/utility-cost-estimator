@@ -1,49 +1,228 @@
 # Output Database Module
 # Display calculated output_db range faithful to Excel structure
 
+collapsible_section <- function(title, output_id, ns, start_open = FALSE) {
+  btn_id  <- paste0("toggle_", output_id)
+  body_id <- paste0("body_",   output_id)
+  icon_id <- paste0("icon_",   output_id)
+
+  tags$div(
+    class = "collapsible-section",
+    style = "margin-bottom: 8px;",
+
+    tags$div(
+      style = paste0(
+        "display: flex; align-items: center; gap: 8px;",
+        "border-bottom: 2px solid #1a5276; padding-bottom: 5px; margin-bottom: 4px;"
+      ),
+      actionLink(
+        ns(btn_id),
+        label = tagList(
+          tags$span(
+            id = ns(icon_id),
+            style = "font-size: 11px; color: #1a5276;",
+            if (start_open) "\u25BC" else "\u25B6"
+          ),
+          tags$span(
+            title,
+            style = "font-size: 16px; font-weight: 600; color: #1a5276; margin-left: 4px;"
+          )
+        ),
+        style = "text-decoration: none; padding: 0;"
+      )
+    ),
+
+    if (start_open) {
+      tags$div(id = ns(body_id), style = "padding-top: 4px;",
+        DTOutput(ns(output_id), width = "100%")
+      )
+    } else {
+      shinyjs::hidden(
+        tags$div(id = ns(body_id), style = "padding-top: 4px;",
+          DTOutput(ns(output_id), width = "100%")
+        )
+      )
+    }
+  )
+}
+
+
+# ── Page TOC ─────────────────────────────────────────────────────────────────
+# Wraps any UI element with a named anchor div for TOC scroll targets
+with_anchor <- function(anchor_id, ...) {
+  tagList(
+    tags$div(id = anchor_id, style = "scroll-margin-top: 60px;"),
+    ...
+  )
+}
+
+output_db_toc <- function() {
+  sections <- list(
+    list(id = "anc-summary",    label = "High Level Summary"),
+    list(id = "anc-costs",      label = "Cost Details"),
+    list(id = "anc-breakdown",  label = "Cost Breakdown"),
+    list(id = "anc-equipment",  label = "Equipment Quantities"),
+    list(id = "anc-outputdb",   label = "Output Database")
+  )
+
+  buttons <- lapply(sections, function(s) {
+    tags$a(
+      href    = paste0("#", s$id),
+      class   = "toc-btn",
+      onclick = paste0(
+        "event.preventDefault();",
+        "var el = document.getElementById('", s$id, "');",
+        "if(el){ var top = el.getBoundingClientRect().top + window.pageYOffset - 60;",
+        "window.scrollTo({top: top, behavior: 'smooth'}); }"
+      ),
+      s$label
+    )
+  })
+
+  tagList(
+    # Floating TOC bar
+    tags$div(
+      id    = "output-toc",
+      style = paste0(
+        "position: sticky; top: 0; z-index: 900;",
+        "background: #fff; border-bottom: 2px solid #1a5276;",
+        "padding: 7px 16px; margin-bottom: 16px;",
+        "display: flex; align-items: center; gap: 8px; flex-wrap: wrap;",
+        "box-shadow: 0 2px 6px rgba(0,0,0,0.08);"
+      ),
+      tags$span(
+        "Jump to:",
+        style = "font-size: 12px; font-weight: 700; color: #555; margin-right: 4px; white-space: nowrap;"
+      ),
+      tagList(buttons)
+    ),
+    # TOC button styles
+    tags$style(HTML("
+      .toc-btn {
+        background: #1a5276;
+        color: #fff !important;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 10px;
+        font-size: 12px;
+        cursor: pointer;
+        white-space: nowrap;
+        text-decoration: none !important;
+        line-height: 1.6;
+        display: inline-block;
+      }
+      .toc-btn:hover {
+        background: #0a2540;
+        color: #fff !important;
+      }
+    "))
+  )
+}
+
 outputDbUI <- function(id) {
   ns <- NS(id)
   
   tagList(
+    output_db_toc(),
+
+    ### HIGH LEVEL SUMMARY -----
+    with_anchor("anc-summary",
     fluidRow(
+      # Contaminant title
+      uiOutput(ns("contaminant_title")),
       # Header Summary
       box(
-        title = "Output Database",
-        status = "primary",
+        title = "High Level Summary",
+        status = "info",
         solidHeader = TRUE,
         width = 12,
         
-        # Summary boxes
-        fluidRow(
-          column(2,
-            valueBoxOutput(ns("total_capital_summary"), width = NULL)
-          ),
-          column(1,
-            h4("+")
-           ),
-          column(2,
-            valueBoxOutput(ns("total_indirect_summary"), width = NULL)
-          ),
-          column(1,
-            h4("+")
-           ),
-          column(2,
-            valueBoxOutput(ns("total_add_on"), width = NULL)
-           ),
-          column(1,
-            h4("=")
-           ),
-          column(2,
-            valueBoxOutput(ns("total_project_summary"), width = NULL)
-          )
-          # ,
-          # column(3,
-          #   valueBoxOutput(ns("annualized_om_summary"), width = NULL)
-          # )
+        # Summary boxes — flex row with operators as flex items
+        tags$div(
+          class = "cost-summary-row",
+          tags$div(class = "cost-summary-item", valueBoxOutput(ns("total_capital_summary"), width = NULL)),
+          tags$div(class = "lp-step-num", "+"),
+          tags$div(class = "cost-summary-item", valueBoxOutput(ns("total_indirect_summary"), width = NULL)),
+          tags$div(class = "cost-summary-operator", "+"),
+          tags$div(class = "cost-summary-item", valueBoxOutput(ns("total_add_on"), width = NULL)),
+          tags$div(class = "cost-summary-operator", "="),
+          tags$div(class = "cost-summary-item", valueBoxOutput(ns("total_project_summary"), width = NULL))
         )
       )
-    ),
-    
+  )),  # end with_anchor("anc-summary")
+
+    ### COST DETAILS -----
+    with_anchor("anc-costs",
+    fluidRow(
+      box(
+        title = "Cost Details",
+        status = "info",
+        solidHeader = TRUE,
+        width = 12,
+
+        shinyjs::useShinyjs(),        
+        # h4("Total Direct Capital Cost", 
+        #   style = "color: #1a5276; border-bottom: 2px solid #1a5276; padding-bottom: 5px;"),
+        # DTOutput(ns("total_direct_table"), width = "100%"),
+        # br(),
+        
+        # h4("Indirect Capital Cost Details", 
+        #   style = "color: #1a5276; border-bottom: 2px solid #1a5276; padding-bottom: 5px;"),
+        # DTOutput(ns("indirect_costs_table"), width = "100%"),
+        # br(),
+
+        # h4("Add-on Cost Details",
+        #   style = "color: #1a5276; border-bottom: 2px solid #1a5276; padding-bottom: 5px;"),
+        # DTOutput(ns("addon_costs_table"), width = "100%"),
+        # br(),
+
+        # h4("Grand Total Capital Cost", 
+        #   style = "color: #1a5276; border-bottom: 2px solid #1a5276; padding-bottom: 5px;"),
+        # DTOutput(ns("total_project_table"), width = "100%"),
+        # br(),
+        
+        # h4("Annual Operating & Maintenance Costs Details", 
+        #   style = "color: #1a5276; border-bottom: 2px solid #1a5276; padding-bottom: 5px;"),
+        # DTOutput(ns("annual_om_table"), width = "100%")
+      
+        collapsible_section("Total Direct Capital Cost",             "total_direct_table",   ns, start_open = FALSE),
+        collapsible_section("Indirect Capital Cost Details",         "indirect_costs_table", ns, start_open = FALSE),
+        collapsible_section("Add-on Cost Details",                   "addon_costs_table",    ns, start_open = FALSE),
+        collapsible_section("Grand Total Capital Cost",              "total_project_table",  ns, start_open = FALSE),
+        collapsible_section("Annual Operating & Maintenance Costs",  "annual_om_table",      ns, start_open = FALSE)
+      )
+    )),  # end with_anchor("anc-costs")
+
+### PLOTS -----
+    with_anchor("anc-breakdown",
+    fluidRow(
+  # Cost Summary Chart
+      box(
+        title = "Cost Breakdown by Category",
+        status = "info",
+        solidHeader = TRUE,
+        width = 12,
+        
+        plotOutput(ns("cost_breakdown_chart"), height = 400)
+      )
+    )),  # end with_anchor("anc-breakdown")
+
+  #### EQUIPMENT PLOT
+    with_anchor("anc-equipment",
+    fluidRow(
+  # Equipment Summary Chart
+      box(
+        title = "Equipment Quantities",
+        status = "info",
+        solidHeader = TRUE,
+        width = 12,
+        
+        plotOutput(ns("equipment_chart"), height = 400)
+      )
+)),  # end with_anchor("anc-equipment")
+
+    ### OUTPUT DATABASE -----
+    with_anchor("anc-outputdb",
     fluidRow(
       # Main Output Database Table
       box(
@@ -54,7 +233,7 @@ outputDbUI <- function(id) {
         
          # Input Parameters Section
         h4("Input Parameters", 
-           style = "color: #3c8dbc; border-bottom: 2px solid #3c8dbc; padding-bottom: 5px;"),
+           style = "color: #1a5276; border-bottom: 2px solid #1a5276; padding-bottom: 5px;"),
         DTOutput(ns("inputs_table")),
         br(),
 
@@ -63,60 +242,9 @@ outputDbUI <- function(id) {
         tags$div(id = "wbs-table-container",
           DTOutput(ns("test_table"))
         ),
-        br(),
-          
-        # Total Direct Capital Cost
-        h4("Total Direct Capital Cost", 
-           style = "color: #3c8dbc; border-bottom: 2px solid #3c8dbc; padding-bottom: 5px;"),
-        DTOutput(ns("total_direct_table")),
-        br(),
-        
-        # Indirect Costs Section
-        h4("Indirect Capital Cost Details", 
-           style = "color: #3c8dbc; border-bottom: 2px solid #3c8dbc; padding-bottom: 5px;"),
-        DTOutput(ns("indirect_costs_table")),
-        br(),
-
-        # Add-on Costs Section (workbook OUTPUT rows 322-327)
-        h4("Add-on Cost Details",
-           style = "color: #3c8dbc; border-bottom: 2px solid #3c8dbc; padding-bottom: 5px;"),
-        DTOutput(ns("addon_costs_table")),
-        br(),
-
-        # Total Project Cost
-        h4("Grand Total Capital Cost", 
-           style = "color: #3c8dbc; border-bottom: 2px solid #3c8dbc; padding-bottom: 5px;"),
-        DTOutput(ns("total_project_table")),
-        br(),
-        
-        # Annual O&M Costs
-        h4("Annual Operating & Maintenance Costs Details", 
-           style = "color: #3c8dbc; border-bottom: 2px solid #3c8dbc; padding-bottom: 5px;"),
-        DTOutput(ns("annual_om_table"))
+        br()
       )
-    ),
-    
-    fluidRow(
-      # Cost Summary Chart
-      box(
-        title = "Cost Breakdown by Category",
-        status = "info",
-        solidHeader = TRUE,
-        width = 6,
-        
-        plotOutput(ns("cost_breakdown_chart"), height = 400)
-      ),
-      
-      # Equipment Summary Chart
-      box(
-        title = "Equipment Quantities",
-        status = "info",
-        solidHeader = TRUE,
-        width = 6,
-        
-        plotOutput(ns("equipment_chart"), height = 400)
-      )
-    )
+    ))  # end with_anchor("anc-outputdb")
   )
 }
 
@@ -137,6 +265,20 @@ outputDbServer <- function(id, results) {
       }
     })
     
+
+    output$contaminant_title <- renderUI({
+      
+      params    <- output_db()$inputs
+
+      tags$div(
+          class = "target-contaminant-header",
+          h2(paste0("Target Contaminant: ", params$contaminant))
+      )
+
+      
+      #browser()
+    })
+
     # Helper function to build output_db structure from calculation results
     build_output_db_from_results <- function(data) {
       list(
@@ -156,7 +298,7 @@ outputDbServer <- function(id, results) {
       )
     }
     
-    # Value Boxes
+    # ── Value Boxes ──────────────────────────────────────────────────────────────────
     output$total_capital_summary <- renderValueBox({
       req(output_db())
       
@@ -168,7 +310,7 @@ outputDbServer <- function(id, results) {
       
       valueBox(
         value = value,
-        subtitle = "Total Direct Capital",
+        subtitle = "Total Direct Capital Cost",
         icon = icon("dollar-sign"),
         color = "teal"
       )
@@ -283,7 +425,7 @@ outputDbServer <- function(id, results) {
           `data-target` = js_id,
           sec,
           style = paste0(
-            "background:#3c8dbc;color:#fff;border:none;border-radius:4px;",
+            "background:#1a5276;color:#fff;border:none;border-radius:4px;",
             "padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap;"
           )
         )
@@ -294,13 +436,13 @@ outputDbServer <- function(id, results) {
         tags$div(
           id = "wbs-nav-inline",
           style = paste0(
-            "background:#fff;border:1px solid #d4e6f1;border-radius:6px;",
+            "background:#fff;border:1px solid #b2dfdb;border-radius:6px;",
             "padding:7px 12px;margin-bottom:14px;",
             "display:flex;align-items:center;gap:6px;flex-wrap:wrap;",
             "box-shadow:0 2px 5px rgba(0,0,0,0.07);"
           ),
           tags$span(
-            style = "font-size:11px;font-weight:700;color:#555;margin-right:4px;white-space:nowrap;",
+            style = "font-size:11px;font-weight:700;color:#6c757d;margin-right:4px;white-space:nowrap;",
             "Jump to section:"
           ),
           tagList(buttons)
@@ -312,13 +454,13 @@ outputDbServer <- function(id, results) {
           style = paste0(
             "display:none;position:fixed;top:50px;left:300px;",
             "right:0;z-index:9999;",
-            "background:#fff;border-bottom:2px solid #3c8dbc;",
+            "background:#fff;border-bottom:2px solid #1a5276;",
             "padding:7px 16px;",
             "display:none;align-items:center;gap:6px;flex-wrap:wrap;",
             "box-shadow:0 3px 8px rgba(0,0,0,0.15);"
           ),
           tags$span(
-            style = "font-size:11px;font-weight:700;color:#555;margin-right:4px;white-space:nowrap;",
+            style = "font-size:11px;font-weight:700;color:#6c757d;margin-right:4px;white-space:nowrap;",
             "Jump to section:"
           ),
           tagList(buttons)
@@ -472,7 +614,10 @@ outputDbServer <- function(id, results) {
         ),
         Value = c(
           as.character(params$contaminant %||% ""),
-          as.character(controls$system_scale %||% ""),
+          # Workbook OUTPUT C4: =IF(ss_cat2=1,"small","large")
+          # ss_cat2 = IF(design_flow<1,1,IF(design_flow<10,2,3)) — HVAC!C5
+          # Only two display labels: "small" (flow<1 MGD) or "large" (flow>=1 MGD)
+          if (as.numeric(params$design_flow %||% 0) < 1) "small" else "large",
           "GAC",
           if (is_gravity) "Gravity" else "Pressure",
           as.character(params$design_flow %||% ""),
@@ -888,7 +1033,12 @@ outputDbServer <- function(id, results) {
           options = list(
             pageLength = 10,
             dom = 't',
-            ordering = FALSE
+            ordering = FALSE,
+            autoWidth = FALSE,
+            columnDefs = list(
+              list(width = "70%", targets = 0),   # Category/Item col
+              list(width = "30%", targets = 1, className = "dt-right")  # Cost col
+            )
           ),
           rownames = FALSE,
           class = 'cell-border stripe'
@@ -952,7 +1102,13 @@ outputDbServer <- function(id, results) {
           options = list(
             pageLength = 20,
             dom = 't',
-            ordering = FALSE
+            ordering = FALSE,
+            autoWidth = FALSE,
+            columnDefs = list(
+              list(width = "55%", targets = 0),
+              list(width = "25%", targets = 1, className = "dt-right"),
+              list(width = "20%", targets = 2, className = "dt-right")
+            )
           ),
           rownames = FALSE,
           class = 'cell-border stripe'
@@ -961,7 +1117,7 @@ outputDbServer <- function(id, results) {
           'Item',
           target = 'row',
           fontWeight = styleEqual('TOTAL INDIRECT COSTS', 'bold'),
-          backgroundColor = styleEqual('TOTAL INDIRECT COSTS', '#f0f7ff')
+          backgroundColor = styleEqual('TOTAL INDIRECT COSTS', '#e8f6f4')
         )
     })
     
@@ -1003,7 +1159,17 @@ outputDbServer <- function(id, results) {
 
       df |>
         datatable(
-          options = list(pageLength = 10, dom = 't', ordering = FALSE),
+          options = list(
+            pageLength = 10, 
+            dom = 't', 
+            ordering = FALSE,
+            autoWidth = FALSE,
+            columnDefs = list(
+              list(width = "55%", targets = 0),
+              list(width = "25%", targets = 1, className = "dt-right"),
+              list(width = "20%", targets = 2, className = "dt-right")
+            )
+          ),
           rownames = FALSE,
           class = 'cell-border stripe'
         ) |>
@@ -1011,7 +1177,7 @@ outputDbServer <- function(id, results) {
           'Item',
           target = 'row',
           fontWeight = styleEqual('TOTAL ADD-ON COSTS', 'bold'),
-          backgroundColor = styleEqual('TOTAL ADD-ON COSTS', '#f0f7ff')
+          backgroundColor = styleEqual('TOTAL ADD-ON COSTS', '#e8f6f4')
         )
     })
 
@@ -1044,7 +1210,12 @@ outputDbServer <- function(id, results) {
           options = list(
             pageLength = 6,
             dom = 't',
-            ordering = FALSE
+            ordering = FALSE,
+            autoWidth = FALSE,
+            columnDefs = list(
+              list(width = "70%", targets = 0),   # Category/Item col
+              list(width = "30%", targets = 1, className = "dt-right")  # Cost col
+            )
           ),
           rownames = FALSE,
           class = 'cell-border stripe'
@@ -1054,7 +1225,7 @@ outputDbServer <- function(id, results) {
           target = 'row',
           fontWeight = styleEqual('TOTAL PROJECT COST', 'bold'),
           fontSize  = styleEqual('TOTAL PROJECT COST', '16px'),
-          backgroundColor = styleEqual('TOTAL PROJECT COST', '#f0f7ff')
+          backgroundColor = styleEqual('TOTAL PROJECT COST', '#e8f6f4')
         )
     })
     
@@ -1175,8 +1346,12 @@ outputDbServer <- function(id, results) {
           pageLength = 30,
           dom = "t",
           ordering = FALSE,
+          autoWidth = FALSE,
           columnDefs = list(
-            list(className = "dt-right", targets = c(1, 2, 3))
+            list(width = "45%", targets = 0),
+            list(width = "20%", targets = 1, className = "dt-right"),
+            list(width = "20%", targets = 2, className = "dt-right"),
+            list(width = "15%", targets = 3, className = "dt-right")
           )
         ),
         rownames = FALSE,
@@ -1186,7 +1361,7 @@ outputDbServer <- function(id, results) {
           "Item",
           target = "row",
           fontWeight = styleRow(header_rows, "bold"),
-          backgroundColor = styleRow(header_rows, "#EEF4FB")
+          backgroundColor = styleRow(header_rows, "#e8f6f4")
         ) |>
         formatStyle(
           "Total ($/yr)",
@@ -1195,7 +1370,7 @@ outputDbServer <- function(id, results) {
           fontSize  = styleRow(nrow(df), "105%")
         )
     })
-    
+
     # Cost Breakdown Chart
     output$cost_breakdown_chart <- renderPlot({
       req(output_db())
@@ -1206,7 +1381,7 @@ outputDbServer <- function(id, results) {
         df <- costs$breakdown
         
         ggplot2::ggplot(df, ggplot2::aes(x = reorder(Category, Cost), y = Cost)) +
-          ggplot2::geom_col(fill = "#3c8dbc") +
+          ggplot2::geom_col(fill = "#0e8a7d") +
           ggplot2::coord_flip() +
           ggplot2::scale_y_continuous(labels = scales::dollar_format()) +
           ggplot2::theme_minimal(base_size = 12) +
@@ -1237,7 +1412,7 @@ outputDbServer <- function(id, results) {
       
       ggplot2::ggplot(df, ggplot2::aes(x = Equipment, y = Quantity, fill = Equipment)) +
         ggplot2::geom_col(show.legend = FALSE) +
-        ggplot2::scale_fill_manual(values = c("#00a65a", "#f39c12", "#dd4b39")) +
+        ggplot2::scale_fill_manual(values = c("#0e8a7d", "#d4a017", "#1a5276")) +
         ggplot2::theme_minimal(base_size = 12) +
         ggplot2::labs(
           title = "Major Equipment Quantities",
@@ -1269,5 +1444,23 @@ outputDbServer <- function(id, results) {
         showNotification("CSV export feature coming soon", type = "info")
       }
     )
+
+    # ── Collapsible section toggles (shinyjs) ────────────────────────────────
+    toggle_section <- function(btn_id, body_id, icon_id) {
+      observeEvent(input[[btn_id]], {
+        shinyjs::toggle(id = body_id, anim = TRUE, animType = "slide", time = 0.2)
+        # Flip the arrow icon
+        current <- isolate(input[[btn_id]])  # click count — odd = open, even = closed
+        is_open <- (current %% 2) == 1
+        shinyjs::html(id = icon_id, html = if (is_open) "\u25BC" else "\u25B6")
+      }, ignoreNULL = TRUE)
+    }
+
+    toggle_section("toggle_total_direct_table",   "body_total_direct_table",   "icon_total_direct_table")
+    toggle_section("toggle_indirect_costs_table", "body_indirect_costs_table", "icon_indirect_costs_table")
+    toggle_section("toggle_addon_costs_table",    "body_addon_costs_table",    "icon_addon_costs_table")
+    toggle_section("toggle_total_project_table",  "body_total_project_table",  "icon_total_project_table")
+    toggle_section("toggle_annual_om_table",      "body_annual_om_table",      "icon_annual_om_table")
+
   })
 }

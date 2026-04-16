@@ -165,10 +165,12 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
     NRD_g <- if (!is.na(nrd_i_num) && nrd_i_num > 0) {
       as.integer(nrd_i_num)
     } else if (op_num_basins == 1) {
-      1L   # NRD_small_1 = 1 (workbook: single operating basin always gets 1 redundant)
+      as.integer(get_assumption(critical_assumptions, "NRD_small_1", 1))   # NRD_small_1 = 1 (workbook: single operating basin always gets 1 redundant) # [GA] 
     } else {
       ss_cat2 <- if (design_flow < 1) 1L else if (design_flow < 10) 2L else 3L
-      c(0L, 1L, 2L)[ss_cat2]   # NRD_small=0, medium=1, large=2
+      c(as.integer(get_assumption(critical_assumptions, "NRD_small",        0)),
+        as.integer(get_assumption(critical_assumptions, "NRD_basins_medium", 1)),
+        as.integer(get_assumption(critical_assumptions, "NRD_basins_large",  2)))[ss_cat2] # NRD_small=0, medium=1, large=2 # [GA] 
     }
     total_contactors <- op_num_basins + NRD_g
     message(sprintf("  Basin calc: op_basins=%d, NRD_g=%d, total=%d",
@@ -323,7 +325,8 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
     # ── Geometry ──────────────────────────────────────────────────────────────
     basin_area_sf        <- basin_length * basin_width          # sf per basin
     basin_op_d           <- if (!is.null(basin_depth) && !is.na(basin_depth)) basin_depth else bed_depth
-    basin_depth_total    <- basin_op_d * (1 + bed_expansion) + 2  # total depth incl. freeboard (CDA basin_freeboard=2)
+    basin_freeboard   <- get_assumption(critical_assumptions, "basin_freeboard", 2)  # [GA] 
+    basin_depth_total <- basin_op_d * (1 + bed_expansion) + basin_freeboard  # total depth incl. freeboard (CDA C33)
     n                    <- total_contactors                    # total basins (op + NRD)
 
     message(sprintf("  Calling BASIN cost functions (workbook formulas):"))
@@ -840,10 +843,10 @@ calculate_pumps <- function(
                     water_flush_gpm    = 0,       
                     res_flow_gpm       = 0,       # residuals flow (gpm), from RM
                     res_holding        = "none",  # "none" = no residuals holding
-                    NRD_pumps          = 0,       # redundant booster pumps, CDA C52
-                    NRD_back_pumps     = 1,       
+                    NRD_pumps          = 0,       # redundant booster pumps, CDA C52  [GA] get_assumption(critical_assumptions, "NRD_pumps", 0)
+                    NRD_back_pumps     = get_assumption(critical_assumptions, "NRD_back_pumps", 1),       # CDA C53  [GA] 
                     NRD_res_pump       = 0,       # redundant residuals pumps
-                    pump_safety_factor = 0.25,    
+                    pump_safety_factor = get_assumption(critical_assumptions, "pump_safety_factor", 0.25),    # CDA C51  [GA] 
                     max_pump_size      = 10000) { # gpm, PPS C8
 
   # Workbook cost equation (Cost Equations rows 130-132, all three pump types identical):
@@ -861,10 +864,10 @@ calculate_pumps <- function(
   design_type        <- safe_as_numeric(design_type,        1)
   water_flush_gpm    <- safe_as_numeric(water_flush_gpm,    0)
   res_flow_gpm       <- safe_as_numeric(res_flow_gpm,       0)
-  NRD_pumps          <- safe_as_numeric(NRD_pumps,          0)
-  NRD_back_pumps     <- safe_as_numeric(NRD_back_pumps,     1)
+  NRD_pumps          <- safe_as_numeric(NRD_pumps,          0)     # [GA] default: get_assumption(critical_assumptions, "NRD_pumps", 0)
+  NRD_back_pumps     <- safe_as_numeric(NRD_back_pumps,     1)     # [GA] default: get_assumption(critical_assumptions, "NRD_back_pumps", 1)
   NRD_res_pump       <- safe_as_numeric(NRD_res_pump,       0)
-  pump_safety_factor <- safe_as_numeric(pump_safety_factor, 0.25)
+  pump_safety_factor <- safe_as_numeric(pump_safety_factor, 0.25)  # [GA] default: get_assumption(critical_assumptions, "pump_safety_factor", 0.25)
   max_pump_size      <- safe_as_numeric(max_pump_size,      10000)
 
   # B&R C9: no_backwash = IF(no_backwash_I="existing pumps", 1,
@@ -3604,10 +3607,15 @@ calculate_gac_system <- function(params) {
       comp_vol  <- df_gpm * ebct_num / 7.481
       flow_num  <- as.numeric(design_flow_mgd)
 
-      target_bd_g  <- if (flow_num <= 1) 6.0 else 8.0
-      min_length_g <- 6.0;  max_length_g <- 30.0
-      min_bd_g     <- 3.0;  max_bd_g     <- 10.0
-      load_max_g   <- 10.0; load_min_g   <- 0.5
+      target_bd_g  <- if (flow_num <= 1) 6.0 else 8.0  # [GA] get_assumption(critical_assumptions, "target_bed_depth_under_g", 6) / "target_bed_depth_over_g", 8)
+      min_length_g <- get_assumption(critical_assumptions, "min_length_g", 6) # [GA]
+      max_length_g <- get_assumption(critical_assumptions, "max_length_g", 30) # [GA] 
+      
+      min_bd_g     <- get_assumption(critical_assumptions, "min_depth", 3) # [GA]
+      max_bd_g     <- get_assumption(critical_assumptions, "max_depth", 10) # [GA]      
+      
+      load_max_g   <- get_assumption(critical_assumptions, "load_max", 10) 
+      load_min_g   <- get_assumption(critical_assumptions, "load_min", 0.5) # [GA] 
 
       r_disc <- 0.07;  ul_yrs <- 16.1
       crf_g  <- r_disc * (1 + r_disc)^ul_yrs / ((1 + r_disc)^ul_yrs - 1)
@@ -3653,12 +3661,12 @@ calculate_gac_system <- function(params) {
           nrd_c     <- if (!is.na(nrd_i_c) && !is.null(p$redundancy) &&
                              !is.na(p$redundancy) && p$redundancy != "") {
             as.integer(nrd_i_c)
-          } else if (op_num_c == 1L) { 1L
-          } else { c(0L, 1L, 2L)[ss_cat2_c] }
+          } else if (op_num_c == 1L) { 1L  # [GA] as.integer(get_assumption(critical_assumptions, "NRD_small_1", 1))
+          } else { c(0L, 1L, 2L)[ss_cat2_c] }  # [GA] c(get_assumption(critical_assumptions,"NRD_small",0), get_assumption(critical_assumptions,"NRD_basins_medium",1), get_assumption(critical_assumptions,"NRD_basins_large",2))[ss_cat2_c]
           total_num_c <- op_num_c + nrd_c
 
           # basin footprint and facility length for this n
-          t_thick <- 1.0
+          t_thick <- get_assumption(critical_assumptions, "conc_thick", 1)  # [GA] 
           basin_fp_c <- (total_num_c * lw_try + (total_num_c + 1L) * t_thick) *
                         (lw_try + 2 * t_thick)
           facil_len_c <- ceiling(sqrt(basin_fp_c) / 10) * 10
@@ -3960,14 +3968,19 @@ calculate_gac_system <- function(params) {
       comp_vol   <- df_gpm * ebct_num / 7.481
 
       flow_num  <- as.numeric(design_flow_mgd)
-      target_bd <- if (flow_num <= 0.1) 4.0 else 7.0   # CDA C25/C26
+      target_bd <- if (flow_num <= 0.1) 4.0 else 7.0   # CDA C25/C26  [GA] get_assumption(critical_assumptions, "target_bed_depth_under", 4) / "target_bed_depth_over", 7)
 
-      min_diam <- 1.5;  max_diam_upright <- 14.0   # workbook max_diam CDA C18/CC C24
-      min_bd   <- 2.0;  max_bd   <- 8.5
+      #TODO
+      min_diam <- get_assumption(critical_assumptions, "min_diam", 1.5) #TODO
+      max_diam_upright <- get_assumption(critical_assumptions, "max_diam_override", 14)   # workbook max_diam CDA C18/CC C24  [GA] 
+      
+      min_bd   <- get_assumption(critical_assumptions, "min_bed_depth", 2) 
+      max_bd   <- get_assumption(critical_assumptions, "max_bed_depth", 8.5)   # [GA] 
+      
       max_height_cda <- get_assumption(critical_assumptions, "max_height")
       bed_expansion  <- get_assumption(critical_assumptions, "bed_expansion")
-      freeboard      <- 0.5
-      Vessel_thickness <- 0.0
+      freeboard      <- get_assumption(critical_assumptions, "free_board", 0.5)   # [GA] 
+      Vessel_thickness <- get_assumption(critical_assumptions, "Vessel_thickness", 0) # [GA] 
 
       # Full vessel_size_table_cl (Engineering Data rows 230-252)
       vessel_min_h <- c("1.5"=3,"2"=3.5,"2.5"=4,"3"=4,"3.5"=4.5,
@@ -3985,7 +3998,7 @@ calculate_gac_system <- function(params) {
         tbl[[max(which(keys <= d), 1L)]]
       }
 
-      redund_freq <- 4L
+      redund_freq <- as.integer(get_assumption(critical_assumptions, "redund_freq", 4))  # [GA] 
 
       r_disc <- 0.07;  ul_yrs <- 16.1
       crf_p  <- r_disc * (1 + r_disc)^ul_yrs / ((1 + r_disc)^ul_yrs - 1)
@@ -4428,11 +4441,11 @@ calculate_gac_system <- function(params) {
       n_series     <- as.integer(get_value(params$num_contactors_in_series, 1))
       op_num_tanks <- n_trains * n_series
       params$redundancy <- if (design_flow_mgd >= 1) {
-        as.integer(ceiling(n_trains / 4))   # ROUNDUP(num_treat_lines / redund_freq, 0)
+        as.integer(ceiling(n_trains / 4))   # ROUNDUP(num_treat_lines / redund_freq, 0)  [GA] replace 4 with as.integer(get_assumption(critical_assumptions, "redund_freq", 4))
       } else if (op_num_tanks == 1L) {
-        1L                                   # NRD_small_1 = 1
+        as.integer(get_assumption(critical_assumptions, "NRD_small_1", 1))  # NRD_small_1 = 1  [GA] 
       } else {
-        0L                                   # NRD_small = 0
+        as.integer(get_assumption(critical_assumptions, "NRD_small", 0))  # NRD_small = 0  [GA] 
       }
     }
   }
@@ -4462,11 +4475,17 @@ calculate_gac_system <- function(params) {
       df_gpm <- design_flow_mgd * 1e6 / 1440  # design flow in gpm
 
       # CDAs
-      min_length_g <- 6; max_length_g <- 30
-      min_width_g  <- 6; max_width_g  <- 30
-      min_depth_g  <- 3; max_depth_g  <- 10
+      min_length_g <- get_assumption(critical_assumptions, "min_length_g", 6) 
+      max_length_g <- get_assumption(critical_assumptions, "max_length_g", 30)  # [GA] 
+      
+      min_width_g  <- get_assumption(critical_assumptions, "min_width", 6) #TODO
+      max_width_g  <- get_assumption(critical_assumptions, "max_width",  30)  #TODO [GA] 
+      
+      min_depth_g  <- get_assumption(critical_assumptions, "min_depth", 3)
+      max_depth_g  <- get_assumption(critical_assumptions, "max_depth",  10)  # [GA] 
+      
       # Target bed depth: 6 ft for <=1 MGD, 8 ft for >1 MGD (non-UVAOP)
-      target_bd_g <- if (design_flow_mgd <= 1) 6 else 8
+      target_bd_g <- if (design_flow_mgd <= 1) 6 else 8  # [GA] get_assumption(critical_assumptions, "target_bed_depth_under_g", 6) / "target_bed_depth_over_g", 8)
 
       # Step 1: volume required (comp_vol_required_a)
       comp_vol <- df_gpm * ebct_minutes / 7.481
@@ -4600,9 +4619,11 @@ calculate_gac_system <- function(params) {
                        !is.na(params$redundancy) && params$redundancy != "") {
       as.integer(nrd_i_val)
     } else if (op_num_basins_calc == 1) {
-      1L  # NRD_small_1 = 1 (workbook default: always 1 redundant when 1 operating)
+      1L  # NRD_small_1 = 1 (workbook default: always 1 redundant when 1 operating)  [GA] as.integer(get_assumption(critical_assumptions, "NRD_small_1", 1))
     } else {
-      c(0L, 1L, 2L)[ss_cat2_calc]  # NRD_small=0, NRD_basins_medium=1, NRD_basins_large=2
+      c(as.integer(get_assumption(critical_assumptions, "NRD_small", 0)),
+      as.integer(get_assumption(critical_assumptions, "NRD_basins_medium", 1)),
+      as.integer(get_assumption(critical_assumptions, "NRD_basins_large",  2)))[ss_cat2_calc]  # NRD_small=0, NRD_basins_medium=1, NRD_basins_large=2 # [GA] 
     }
     total_num_basins_calc <- op_num_basins_calc + NRD_g_calc
   } else {

@@ -128,6 +128,7 @@ outputDbUI <- function(id) {
     ### HIGH LEVEL SUMMARY -----
     with_anchor("anc-summary",
     fluidRow(
+      h1("Granular Activated Carbon (GAC)"),
       # Contaminant title
       uiOutput(ns("contaminant_title")),
       # Header Summary

@@ -5,6 +5,7 @@ source("load_libraries.R")
 source("mod_landing.R")
 source("mod_inputs.R")
 source("mod_output_db.R")
+source("mod_release_notes.R")
 
 # Source utility functions
 source("utils.R")
@@ -112,13 +113,13 @@ ui <- dashboardPage(
           target    = "_blank",
           rel       = "noopener noreferrer",
           class     = "footer-model",
-          "Work Breakdown Structure-Based Cost Model: Granular Activated Carbon (GAC) Drinking Water Treatment"
+          "Work Breakdown Structure-Based Cost Model Drinking Water Treatment"
         ),
-        tags$span(class = "footer-label", HTML("&ensp;&bull;&ensp;US EPA Office of Water"))
-      )
+        tags$span(class = "footer-label", "| "),
+        uiOutput("footer_version_link", inline = TRUE)
     )
   )
-)
+))
 
 
 # Server logic
@@ -322,6 +323,32 @@ server <- function(input, output, session) {
   
   # Output Database module server
   outputDbServer("output_db", results)
+
+  # Release notes module — capture return value for dynamic footer version
+  rn_module <- releaseNotesServer("release_notes")
+
+  # Render footer version label dynamically from the latest sheet entry
+  output$footer_version_link <- renderUI({
+    ver   <- tryCatch(rn_module$latest_version(), error = function(e) NA_character_)
+    label <- if (!is.null(ver) && !is.na(ver) && nchar(ver) > 0) {
+      paste("Version", ver)
+    } else {
+      "Release Notes"
+    }
+    actionLink("open_release_notes", label = label, class = "footer-version-link")
+  })
+
+  observeEvent(input$open_release_notes, {
+    showModal(
+      modalDialog(
+        title = "Release Notes",
+        size = "l",
+        easyClose = TRUE,
+        footer = modalButton("Close"),
+        releaseNotesUI("release_notes")
+      )
+    )
+  })
 
  
   

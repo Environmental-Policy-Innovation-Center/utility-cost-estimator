@@ -96,7 +96,8 @@ get_assumption <- function(data, name, default = NA_real_) {
 
 calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_contactors_in_series = 1, redundancy,
                                 bed_depth, diameter = NULL, height_length = NULL,
-                                basin_length = NULL, basin_width = NULL, basin_depth = NULL) {
+                                basin_length = NULL, basin_width = NULL, basin_depth = NULL,
+                                component_level = 1L) {
   
   # Ensure all numeric parameters are actually numeric
   design_flow <- as.numeric(design_flow)
@@ -234,9 +235,38 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
   
   total_gac_volume <- gac_volume_per_contactor * total_contactors
   
+  # ── Basin sub-cost variables (initialized NA; set only in basin branch) ─────
+  # Returned so populate_wbs_values can map individual WBS 1.2.x line items.
+  basin_concrete_vol_cy  <- NA_real_
+  basin_concrete_uc      <- NA_real_
+  basin_concrete_cost    <- NA_real_
+  basin_internals_uc_per <- NA_real_   # uc per basin (bot + top)
+  basin_internals_cost   <- NA_real_
+  basin_railing_lf       <- NA_real_
+  basin_railing_uc       <- NA_real_
+  basin_railing_cost     <- NA_real_
+  basin_stairs_risers    <- NA_real_
+  basin_stairs_uc        <- NA_real_
+  basin_stairs_cost      <- NA_real_
+  basin_excav_cy         <- NA_real_
+  basin_excav_uc         <- NA_real_
+  basin_excav_cost       <- NA_real_
+  basin_backfill_cy      <- NA_real_
+  basin_backfill_uc      <- NA_real_
+  basin_backfill_cost    <- NA_real_
+
   # Calculate costs using Excel methodology
-  component_level <- 1  # Default to Low cost #TODO is this default appropriate
-  
+  # component_level is passed from calculate_gac_system via params$automation_level
+  # (which carries component_level_I from standard_inputs: 1/Low, 2/Mid/Medium, 3/High).
+  # Normalize to integer: accept numeric or string form.
+  component_level <- switch(
+    tolower(trimws(as.character(component_level %||% 1))),
+    "1" = 1L, "low"    = 1L, "low cost"  = 1L,
+    "2" = 2L, "mid"    = 2L, "medium"   = 2L, "mid cost"  = 2L,
+    "3" = 3L, "high"   = 3L, "high cost" = 3L,
+    1L  # default to Low
+  )
+
   # Convert component_level number to name
   component_level_name <- switch(
     as.character(component_level),
@@ -411,6 +441,25 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
                   stairs_cost + excavation_cost + backfill_cost
     unit_cost  <- total_cost / max(1, n)
 
+    # Capture sub-costs for WBS 1.2.x populate_wbs_values mapping
+    basin_concrete_vol_cy  <- conc_vol_cy
+    basin_concrete_uc      <- conc_uc
+    basin_concrete_cost    <- concrete_cost
+    basin_internals_uc_per <- bot_uc_safe + top_uc_safe
+    basin_internals_cost   <- internals_cost
+    basin_railing_lf       <- railing_lf
+    basin_railing_uc       <- railing_uc
+    basin_railing_cost     <- railing_cost
+    basin_stairs_risers    <- stairs_risers
+    basin_stairs_uc        <- stairs_uc
+    basin_stairs_cost      <- stairs_cost
+    basin_excav_cy         <- excav_cy
+    basin_excav_uc         <- excavate_uc
+    basin_excav_cost       <- excavation_cost
+    basin_backfill_cy      <- backfill_cy
+    basin_backfill_uc      <- backfill_uc
+    basin_backfill_cost    <- backfill_cost
+
     message(sprintf("    Concrete:   %.2f cy × $%.2f = $%.0f", conc_vol_cy,  conc_uc,     concrete_cost))
     message(sprintf("    Internals:  %d × ($%.0f bot + $%.0f top) = $%.0f", n, bot_uc_safe, top_uc_safe, internals_cost))
     message(sprintf("    Railing:    %.1f lf × $%.0f = $%.0f", railing_lf, railing_uc, railing_cost))
@@ -422,7 +471,22 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
   message(sprintf("Unit cost: $%.0f", unit_cost))
   message(sprintf("Total cost: $%.0f", total_cost))
   message(sprintf("================================"))
-  
+
+  # ── Effective vessel material (pressure vessels only) ─────────────────────
+  # Mirrors CompSelect cascade: FG→CSP when vol > 901 gal, CSP→CS when
+  # vol > 27,101 gal.  Returned so build_wbs_table shows the correct item.
+  effective_vessel_material <- if (!is_basin) {
+    dplyr::case_when(
+      vessel_material == "FG"  & actual_volume_gal > 901   ~ "CSP",
+      vessel_material == "CSP" & actual_volume_gal > 27101 ~ "CS",
+      TRUE                                                  ~ vessel_material
+    )
+  } else {
+    NA_character_
+  }
+  message(sprintf("Effective vessel material: %s (after contact-vendor cascade check)",
+                  if (is.na(effective_vessel_material)) "N/A (basin)" else effective_vessel_material))
+
   list(
     component_level_name = component_level_name,
     total_contactors = total_contactors,
@@ -438,7 +502,29 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
     basin_width  = basin_width,
     basin_depth  = basin_depth,
     unit_cost = unit_cost,
-    total_cost = total_cost
+    total_cost = total_cost,
+    vessel_material = effective_vessel_material,
+    # ── WBS 1.2.x basin sub-costs (NA for pressure vessel designs) ────────────
+    basin_concrete_vol_cy  = basin_concrete_vol_cy,
+    basin_concrete_uc      = basin_concrete_uc,
+    basin_concrete_cost    = basin_concrete_cost,
+    basin_internals_uc_per = basin_internals_uc_per,
+    basin_internals_cost   = basin_internals_cost,
+    basin_railing_lf       = basin_railing_lf,
+    basin_railing_uc       = basin_railing_uc,
+    basin_railing_cost     = basin_railing_cost,
+    basin_stairs_risers    = basin_stairs_risers,
+    basin_stairs_uc        = basin_stairs_uc,
+    basin_stairs_cost      = basin_stairs_cost,
+    basin_excav_cy         = basin_excav_cy,
+    basin_excav_uc         = basin_excav_uc,
+    basin_excav_cost       = basin_excav_cost,
+    basin_backfill_cy      = basin_backfill_cy,
+    basin_backfill_uc      = basin_backfill_uc,
+    basin_backfill_cost    = basin_backfill_cost,
+    num_basins             = if (is_basin) total_contactors else NA_integer_,
+    basin_vol_gal          = if (is_basin) actual_volume_gal else NA_real_,
+    basin_area_sf          = if (is_basin) basin_area_sf     else NA_real_
   )
 }
 
@@ -2055,7 +2141,7 @@ calculate_controls <- function(automation_level, num_contactors, num_trains, man
 
   list(
     # ── system metadata ───────────────────────────────────────────────────────
-    system_scale = if (num_contactors <= 2) "small" else if (num_contactors <= 6) "medium" else "large", #design flow
+    system_scale = switch(as.character(ss_cat2), "1" = "small", "2" = "medium", "3" = "large", "small"), # flow-based: ss_cat2=1→small(<1MGD), 2→medium(1-10MGD), 3→large(>10MGD)
     ss_cat       = ss_cat,
     manual       = manual,
     # ── 6.1 Flow Meters – Influent ────────────────────────────────────────────
@@ -2366,7 +2452,20 @@ calculate_chemical_feed <- function(
     qty_8_5_1=qty_8_5_1,
     uc_8_5_1_portable=uc_8_5_1_portable, tc_8_5_1_portable=tc_8_5_1_portable,
     uc_8_5_1_mounted=uc_8_5_1_mounted,   tc_8_5_1_mounted=tc_8_5_1_mounted,
-    uc_8_5_1_impeller=uc_8_5_1_impeller, tc_8_5_1_impeller=tc_8_5_1_impeller
+    uc_8_5_1_impeller=uc_8_5_1_impeller, tc_8_5_1_impeller=tc_8_5_1_impeller,
+    # Design sizes for WBS table display (workbook OUTPUT col E)
+    ds_8_1_1 = switch(as.character(transfer_method),
+                      "1" = if (transfer_rate > 0) transfer_rate else NA_real_,
+                      "2" = if (!is.na(eductor_size) && eductor_size > 0) eductor_size else NA_real_,
+                      NA_real_),
+    ds_8_1_2 = if (res_holding == "none" || qty_8_1_2 == 0) NA_real_ else
+                 switch(as.character(res_transfer_method),
+                        "1" = if (res_transfer_rate > 0) res_transfer_rate else NA_real_,
+                        "2" = if (!is.na(res_eductor_size) && res_eductor_size > 0) res_eductor_size else NA_real_,
+                        NA_real_),
+    ds_8_2_1 = if (qty_8_2_1 == 0) NA_real_ else hmix_size,
+    ds_8_4_1 = if (qty_8_4_1 == 0) NA_real_ else coag_cmix_size,
+    ds_8_5_1 = if (qty_8_5_1 == 0) NA_real_ else polymer_cmix_size
   )
 }
 
@@ -3678,7 +3777,11 @@ calculate_gac_system <- function(params) {
             num_contactors_in_series = as.numeric(get_value(p$num_contactors_in_series, 1)),
             redundancy = p$redundancy, bed_depth = bd_try,
             diameter = p$vessel_diameter, height_length = p$vessel_height_length,
-            basin_length = lw_try, basin_width = lw_try, basin_depth = bd_try
+            basin_length = lw_try, basin_width = lw_try, basin_depth = bd_try,
+            component_level = switch(
+              tolower(trimws(as.character(p$automation_level %||% 1))),
+              "1"="low","low"="low","low cost"="low","2"="mid","mid"="mid","medium"="mid","mid cost"="mid","3"="high","high"="high","high cost"="high","low"
+            )
           )
 
           # GAC requirements
@@ -3964,7 +4067,7 @@ calculate_gac_system <- function(params) {
 
       df_gpm     <- as.numeric(design_flow_mgd) * 1e6 / 1440
       ebct_num   <- as.numeric(ebct_minutes)
-      num_series <- as.numeric(get_value(params$num_tanks, 1))
+      num_series <- as.numeric(get_value(params$num_contactors_in_series %||% params$num_tanks, 1))
       comp_vol   <- df_gpm * ebct_num / 7.481
 
       flow_num  <- as.numeric(design_flow_mgd)
@@ -4013,16 +4116,13 @@ calculate_gac_system <- function(params) {
           p$bed_depth            <- actual_bd
           p$use_autosize_a       <- "no"
 
-          # NRD mirrors workbook Contactor Constraints C34:
-          #   flow<1: n==1 → 1 redundant vessel; n>1 → 0
-          #   flow>=1: ROUNDUP(n/4, 0) redundant vessels
-          # Without this, redundancy stays at params$redundancy (0 default),
-          # so total_contactors = n instead of n+NRD — vessel cost is wrong.
-          pv_nrd <- if (flow_num < 1.0) {
-            if (n_try == 1L) 1L else 0L
-          } else {
-            as.integer(ceiling(n_try / redund_freq))
-          }
+          # NRD per workbook Contactor Constraints C34:
+          #   NRD = INT(num_treat_lines / redund_freq)  where redund_freq = CDA C16 = 4
+          # This is plain floor division regardless of flow size.
+          # Previously a special case was applied for flow < 1 MGD (NRD=1 when n=1),
+          # which does NOT match the workbook formula and caused the optimizer to
+          # incorrectly prefer n=2 over n=1 for small systems.
+          pv_nrd <- as.integer(n_try %/% redund_freq)
           p$redundancy <- pv_nrd
 
           p$service_pumps      <- as.numeric(get_value(p$service_pumps,      0))
@@ -4052,7 +4152,11 @@ calculate_gac_system <- function(params) {
             num_contactors_in_series = num_series,
             redundancy = p$redundancy, bed_depth = actual_bd,
             diameter = actual_d, height_length = actual_h,
-            basin_length = NULL, basin_width = NULL, basin_depth = NULL
+            basin_length = NULL, basin_width = NULL, basin_depth = NULL,
+            component_level = switch(
+              tolower(trimws(as.character(p$automation_level %||% 1))),
+              "1"="low","low"="low","low cost"="low","2"="mid","mid"="mid","medium"="mid","mid cost"="mid","3"="high","high"="high","high cost"="high","low"
+            )
           )
           gac_r <- calculate_gac_requirements(
             total_volume = con_r$gac_volume_per_contactor * as.integer(n_try),
@@ -4287,8 +4391,11 @@ calculate_gac_system <- function(params) {
       comp_vert_max_sa  <- (max_diam_upright / 2)^2 * pi          # AutoSize C22: uses max_diam=14
       comp_vert_max_media <- comp_vert_max_sa * comp_max_vert_bd_global  # AutoSize C21
       c26_min <- if (comp_vert_max_sa > 0) (df_gpm / 10) / comp_vert_max_sa else 0
-      c27_min <- if (comp_vert_max_sa > 0) (comp_vol / target_bd) / comp_vert_max_sa else 0
-      c28_min <- if (comp_vert_max_media > 0) comp_vol / comp_vert_max_media else 0   # uses comp_vol_stg1 in WB but comp_vol≈comp_vol_stg1
+      # c27/c28: comp_vol is total-system volume (flow × EBCT_total); for series vessels
+      # each individual vessel holds comp_vol/num_series, so divide by num_series before
+      # comparing against the per-vessel max SA and media limits.
+      c27_min <- if (comp_vert_max_sa > 0) (comp_vol / num_series / target_bd) / comp_vert_max_sa else 0
+      c28_min <- if (comp_vert_max_media > 0) comp_vol / num_series / comp_vert_max_media else 0
       min_n_pv <- max(1L, as.integer(ceiling(max(c26_min, c27_min, c28_min))))
 
       extra_search <- 5L
@@ -4299,7 +4406,9 @@ calculate_gac_system <- function(params) {
       for (n_try in seq.int(min_n_pv, 200L)) {
 
         # ── Geometry ─────────────────────────────────────────────────────────
-        comp_sa_n <- comp_vol / target_bd / n_try
+        # comp_sa_n: required SA per vessel = (volume per vessel) / bed_depth
+        # volume per vessel = comp_vol / num_series / n_try  (divide by series AND trains)
+        comp_sa_n <- comp_vol / num_series / target_bd / n_try
         raw_d     <- 2 * (sqrt(comp_sa_n / pi) + Vessel_thickness)
         c88       <- 2 * (sqrt(comp_vol / num_series / pi / max_bd / n_try) + Vessel_thickness)
         comp_min_d <- ceiling(2 * max(c88, min_diam)) / 2
@@ -4355,8 +4464,8 @@ calculate_gac_system <- function(params) {
                         n_try, raw_d, comp_min_d, actual_d, raw_bd, max_bd_v, actual_bd,
                         (1 + bed_expansion) * actual_bd + freeboard, actual_h))
 
-        # Compute NRD for this candidate the same way calc_ann_pv does
-        dbg_nrd <- if (flow_num < 1.0) { if (n_try == 1L) 1L else 0L } else as.integer(ceiling(n_try / redund_freq))
+        # Compute NRD for this candidate the same way calc_ann_pv does (INT(n/redund_freq))
+        dbg_nrd <- as.integer(n_try %/% redund_freq)
         dbg_total_vessels <- n_try * num_series + dbg_nrd
         dbg_sa <- pi * (actual_d / 2)^2
         dbg_gac_vol_per <- dbg_sa * actual_bd
@@ -4579,6 +4688,16 @@ calculate_gac_system <- function(params) {
   params$regen_type <- get_value(params$regen_type, "regeneration off-site (non-hazardous)")
   params$backwash_frequency <- as.numeric(get_value(params$backwash_frequency, 52))
   
+  # Derive component_level integer from params$automation_level, which carries
+  # component_level_I from standard_inputs (1/Low, 2/Mid/Medium, 3/High).
+  component_level_int <- switch(
+    tolower(trimws(as.character(params$automation_level %||% 1))),
+    "1" = 1L, "low"    = 1L, "low cost"  = 1L,
+    "2" = 2L, "mid"    = 2L, "medium"   = 2L, "mid cost"  = 2L,
+    "3" = 3L, "high"   = 3L, "high cost" = 3L,
+    1L
+  )
+
   # Calculate contactor sizing
   contactor_results <- calculate_contactors(
     design_flow = design_flow_mgd,
@@ -4592,7 +4711,8 @@ calculate_gac_system <- function(params) {
     height_length = params$vessel_height_length,
     basin_length = params$basin_length,
     basin_width = params$basin_width,
-    basin_depth = params$basin_depth
+    basin_depth = params$basin_depth,
+    component_level = component_level_int
   )
   
   # ── Gravity basin counts (workbook: op_num_basins, total_num_basins) ────────

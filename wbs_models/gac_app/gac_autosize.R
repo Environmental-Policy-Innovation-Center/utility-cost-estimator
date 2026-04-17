@@ -115,7 +115,11 @@ calc_ann_for_n <- function(n_try, lw_try, bd_try,
       num_contactors_in_series = as.numeric(get_value(p$num_contactors_in_series, 1)),
       redundancy = p$redundancy, bed_depth = bd_try,
       diameter = p$vessel_diameter, height_length = p$vessel_height_length,
-      basin_length = lw_try, basin_width = lw_try, basin_depth = bd_try
+      basin_length = lw_try, basin_width = lw_try, basin_depth = bd_try,
+      component_level = switch(
+        tolower(trimws(as.character(p$automation_level %||% 1))),
+        "1"="low","low"="low","low cost"="low","2"="mid","mid"="mid","medium"="mid","mid cost"="mid","3"="high","high"="high","high cost"="high","low"
+      )
     )
 
     # Workbook: GAC_each = media_volume × num_treat_lines (operating trains only, no NRD)
@@ -372,13 +376,12 @@ calc_ann_pv <- function(n_try, actual_d, actual_bd, actual_h,
     p$use_autosize_a       <- "no"
 
     # ── NRD (CC C34) ────────────────────────────────────────────────────────
-    # flow < 1 MGD: NRD = 1 if single vessel, else 0
-    # flow >= 1 MGD: NRD = ROUNDUP(num_treat_lines / redund_freq, 0)
-    pv_nrd <- if (flow_num < 1.0) {
-      if (n_try == 1L) 1L else 0L
-    } else {
-      as.integer(ceiling(n_try / redund_freq))
-    }
+    # Workbook CC C34: NRD = INT(num_treat_lines / redund_freq)
+    # where redund_freq = CDA C16 = 4. Plain floor division, no flow-size
+    # special case. Previous logic (NRD=1 when flow<1 MGD and n==1) did not
+    # match the workbook and caused the optimizer to favour n=2 over n=1 for
+    # small systems, inflating train count, contactor count, and carbon life.
+    pv_nrd <- as.integer(n_try %/% redund_freq)
     p$redundancy <- pv_nrd
 
     # ── Apply parameter defaults ────────────────────────────────────────────
@@ -411,7 +414,11 @@ calc_ann_pv <- function(n_try, actual_d, actual_bd, actual_h,
       num_contactors_in_series = num_series,
       redundancy = p$redundancy, bed_depth = actual_bd,
       diameter = actual_d, height_length = actual_h,
-      basin_length = NULL, basin_width = NULL, basin_depth = NULL
+      basin_length = NULL, basin_width = NULL, basin_depth = NULL,
+      component_level = switch(
+        tolower(trimws(as.character(p$automation_level %||% 1))),
+        "1"="low","low"="low","low cost"="low","2"="mid","mid"="mid","medium"="mid","mid cost"="mid","3"="high","high"="high","high cost"="high","low"
+      )
     )
 
     # Workbook: GAC_each = media_volume × num_treat_lines (operating trains only, no NRD)

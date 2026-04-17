@@ -257,6 +257,19 @@ calculate_pressure_vessel_cost <- function(volume_gal, material = "CS",
       Q = volume_gal, coeffs = csp_coeffs,
       min_range = csp_coeffs$min_range, max_range = csp_coeffs$max_range
     )
+    equation_key <- "csp_pv_eq"  # track cascade for next fallback check
+  }
+
+  # CSP max range = 27,101 gal. If CSP is also out of range, cascade to CS
+  # (Carbon Steel - Stainless Internals, priority 3 for Small_Low).
+  if (is.na(unit_cost) && equation_key == "csp_pv_eq") {
+    message(sprintf("  [PV Cost] csp_pv_eq out of range (%.0f gal > 27101) — cascading to CS (CompSelect priority 3)",
+                    volume_gal))
+    cs_coeffs <- get_equipment_coefficients("cs_pv_eq", component_level, coeff_table)
+    unit_cost  <- calculate_equipment_cost(
+      Q = volume_gal, coeffs = cs_coeffs,
+      min_range = cs_coeffs$min_range, max_range = cs_coeffs$max_range
+    )
   }
 
   message(sprintf("  [PV Cost Function] Unit cost: $%.2f",

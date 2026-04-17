@@ -282,523 +282,597 @@ is_wbs_applicable <- function(wbs, full_item_name, app) {
 # WBS row, or NULLs when the field is not mapped.
 # ---------------------------------------------------------------------------
 populate_wbs_values <- function(wbs, item_lower, contactors, tanks, piping, pumps, gac, controls, chem_feed, site, capital_costs) {
-  
-  qty  <- NA_real_
-  ds <- NA_real_
-  uc   <- NA_real_
-  tc   <- NA_real_
-  
+
+  qty <- NA_real_
+  ds  <- NA_real_
+  uc  <- NA_real_
+  tc  <- NA_real_
+  ul  <- NA_real_
+
+  # ── Useful life helper ────────────────────────────────────────────────────
+  # Mirrors workbook OUTPUT col K: VLOOKUP(size, cost_cl, IF(ss_cat="large",4,5))
+  # ss_cat = "small" when design_flow < 1 MGD, else "large".
+  # controls$system_scale maps to: "small" | "medium" | "large"
+  # "medium" and "large" both use the large-column values (ss_cat2 = 2 or 3).
+  {
+    scale_lc    <- tolower(trimws(as.character(controls$system_scale %||% "small")))
+    is_lg       <- (scale_lc != "small")        # large col when medium or large
+    item_lc_ul  <- tolower(trimws(item_lower))  # already lowercased in caller
+
+    ul <- {
+      # ── 1.1.1 Pressure vessels ──
+      if (grepl("^1\\.1\\.1$", wbs)) {
+        if (grepl("fiberglass", item_lc_ul)) if (is_lg) 25L else 20L
+        else if (is_lg) 35L else 30L          # SS, CS, CSP
+
+      # ── 1.2.x GAC Basins (concrete, internals, railing, stairs, excav, backfill)
+      } else if (grepl("^1\\.2\\.", wbs)) {
+        if (is_lg) 40L else 37L               # conc_basin_cost_cl
+
+      # ── 2.1.1 / 2.2.1 Backwash / Residuals Tanks ──
+      } else if (grepl("^2\\.[12]\\.1$", wbs)) {
+        if (grepl("concrete", item_lc_ul))                          if (is_lg) 40L else 37L
+        else if (grepl("steel", item_lc_ul))                        if (is_lg) 35L else 30L
+        else if (grepl("fiberglass|hdpe|plastic", item_lc_ul))      if (is_lg) 25L else 20L
+        else if (is_lg) 25L else 20L
+
+      # ── 2.3.1 Ferric Chloride Tanks (plastic/FG) ──
+      } else if (grepl("^2\\.3\\.1$", wbs)) {
+        if (is_lg) 10L else 7L
+
+      # ── 2.3.2 Secondary Containment – Concrete Curbing ──
+      } else if (grepl("^2\\.3\\.2$", wbs)) {
+        if (is_lg) 40L else 37L
+
+      # ── 2.3.3 Secondary Containment – Chemical Resistant Coating ──
+      } else if (grepl("^2\\.3\\.3$", wbs)) {
+        10L                                   # same for both sizes
+
+      # ── 2.4.1 Polymer Tanks ──
+      } else if (grepl("^2\\.4\\.1$", wbs)) {
+        if (grepl("stainless", item_lc_ul))   if (is_lg) 35L else 30L
+        else if (is_lg) 10L else 7L           # plastic/XLPE, FG
+
+      # ── 3.x.1 Piping (process / backwash / influent / residuals / ferric / polymer / bypass)
+      } else if (grepl("^3\\.[1-7]\\.1$", wbs)) {
+        if (grepl("ductile iron", item_lc_ul))           if (is_lg) 40L else 35L
+        else if (grepl("cpvc",            item_lc_ul))   if (is_lg) 22L else 17L
+        else if (grepl("pvc",             item_lc_ul))   if (is_lg) 22L else 17L
+        else if (grepl("stainless steel", item_lc_ul))   if (is_lg) 45L else 40L
+        else if (grepl("steel",           item_lc_ul))   if (is_lg) 35L else 33L
+        else NA_real_
+
+      # 3.4.2 Excavation / 3.4.3 Bedding / 3.4.5 Backfill / 3.4.6 Thrust Blocks
+      # → inherit from 3.4.1 (residuals piping); filled by post-processing step in build_wbs_table
+      } else if (grepl("^3\\.4\\.[2356]$", wbs)) {
+        NA_real_
+
+      # ── 4.x Valves (all materials: PP/PVC, SS, CI = 25/20) ──
+      } else if (grepl("^4\\.", wbs)) {
+        if (is_lg) 25L else 20L
+
+      # ── 5.x Pumps ──
+      } else if (grepl("^5\\.[123]$", wbs)) {
+        if (is_lg) 20L else 17L               # booster / backwash / residuals
+      } else if (grepl("^5\\.[45]\\.1$", wbs)) {
+        if (grepl("electric", item_lc_ul))    if (is_lg) 20L else 15L
+        else if (is_lg) 20L else 17L          # motor driven
+
+      # ── 6.x Instrumentation ──
+      } else if (grepl("^6\\.[1-4]\\.1$", wbs)) {
+        if (is_lg) 15L else 14L               # all flow meter types
+      } else if (grepl("^6\\.[5-9]$|^6\\.1[01]$", wbs)) {
+        if (is_lg) 15L else 14L               # alarms, pH, temp, turbidity, headloss
+      } else if (grepl("^6\\.12\\.1$", wbs)) {
+        if (grepl("stainless|ss", item_lc_ul)) if (is_lg) 35L else 30L
+        else if (is_lg) 25L else 22L          # carbon steel
+      } else if (grepl("^6\\.13$", wbs)) {
+        if (is_lg) 22L else 17L               # electrical enclosure
+
+      # ── 7.x System Controls ──
+      } else if (grepl("^7\\.2\\.1$", wbs)) {
+        if (is_lg) 15L else 14L               # drive controllers (switch_cost_cl)
+      } else if (grepl("^7\\.", wbs)) {
+        if (is_lg) 10L else 8L                # all other PLC / software / operator equip
+
+      # ── 8.x Chemical Feed and Transfer ──
+      } else if (grepl("^8\\.[12]\\.1$", wbs)) {
+        if (grepl("eductor", item_lc_ul))     if (is_lg) 45L else 40L
+        else if (grepl("manual", item_lc_ul)) NA_real_
+        else if (is_lg) 20L else 15L          # slurry pump system
+      } else if (grepl("^8\\.[245]\\.1$", wbs)) {
+        if (grepl("mounted", item_lc_ul))     if (is_lg) 25L else 22L
+        else if (is_lg) 25L else 20L          # portable / impeller
+
+      # ── 9.1 GAC Media – N/A per workbook ──
+      } else if (grepl("^9\\.1$", wbs)) {
+        NA_real_
+
+      # ── 10.x On-site Regeneration ──
+      } else if (grepl("^10\\.[12]$", wbs)) {
+        20L                                   # same for both sizes
+      } else if (grepl("^10\\.[345]\\.1$", wbs)) {
+        if (grepl("concrete", item_lc_ul))    if (is_lg) 40L else 37L
+        else if (is_lg) 35L else 30L          # steel tanks
+
+      # ── 11.x Septic System ──
+      } else if (grepl("^11\\.[123]$", wbs)) {
+        if (is_lg) 40L else 37L
+      } else if (grepl("^11\\.[456]$", wbs)) {
+        if (is_lg) 45L else 40L
+
+      # ── 12.1 Solids Drying Pad ──
+      } else if (grepl("^12\\.1$", wbs)) {
+        if (is_lg) 40L else 37L               # conc_pad_cost_cl
+
+      # ── 13.x Evaporation Pond ──
+      } else if (grepl("^13\\.", wbs)) {
+        if (is_lg) 10L else 10L               # ep_liner_cost_cl
+
+      # ── 14.x Buildings and HVAC ──
+      } else if (grepl("^14\\.[1-4]\\.1$", wbs)) {
+        if (grepl("shed|small low", item_lc_ul))  if (is_lg) 25L else 20L
+        else if (is_lg) 40L else 37L              # low / mid / high quality
+      } else if (grepl("^14\\.[12]\\.[23]\\.1$", wbs)) {
+        if (is_lg) 25L else 20L                   # HVAC systems
+      } else if (grepl("^14\\.5$", wbs)) {
+        if (is_lg) 40L else 37L                   # concrete pad
+
+      } else {
+        NA_real_
+      }
+    }
+  }
+
   wbs <- trimws(as.character(wbs %||% ""))
-  
-  # --- 1. GAC Contactors (pressure vessels) ---
+
+  # ── 1.1.1  GAC Pressure Vessels ──────────────────────────────────────────────
   if (grepl("^1\\.1\\.1$", wbs)) {
     qty <- contactors$total_contactors
-    ds <- contactors$volume_per_contactor_gal 
+    ds  <- contactors$volume_per_contactor_gal       # gal per vessel
     uc  <- contactors$unit_cost
     tc  <- contactors$total_cost
   }
-  
-  # --- 2.1 Backwash Tanks ---
+
+  # ── 1.2.1  GAC Basins – Concrete ─────────────────────────────────────────────
+  if (grepl("^1\\.2\\.1$", wbs)) {
+    qty <- contactors$num_basins    %||% 0
+    ds  <- contactors$basin_vol_gal %||% NA_real_   # gal per basin (workbook: basin_vol)
+    uc  <- contactors$basin_concrete_uc      %||% NA_real_
+    tc  <- contactors$basin_concrete_cost    %||% NA_real_
+  }
+
+  # ── 1.2.2  GAC Basins – Internals (Underdrain/Backwash) ──────────────────────
+  if (grepl("^1\\.2\\.2$", wbs)) {
+    qty <- contactors$num_basins     %||% 0
+    ds  <- contactors$basin_area_sf  %||% NA_real_  # sf per basin (workbook: basin_area = L×W)
+    uc  <- contactors$basin_internals_uc_per %||% NA_real_
+    tc  <- contactors$basin_internals_cost   %||% NA_real_
+  }
+
+  # ── 1.2.3  GAC Basins – Aluminum Railing ─────────────────────────────────────
+  if (grepl("^1\\.2\\.3$", wbs)) {
+    qty <- contactors$basin_railing_lf       %||% NA_real_   # qty unit = lf
+    uc  <- contactors$basin_railing_uc       %||% NA_real_
+    tc  <- contactors$basin_railing_cost     %||% NA_real_
+  }
+
+  # ── 1.2.4  GAC Basins – Aluminum Stairs ──────────────────────────────────────
+  if (grepl("^1\\.2\\.4$", wbs)) {
+    qty <- contactors$basin_stairs_risers    %||% NA_real_   # qty unit = risers
+    uc  <- contactors$basin_stairs_uc        %||% NA_real_
+    tc  <- contactors$basin_stairs_cost      %||% NA_real_
+  }
+
+  # ── 1.2.5  GAC Basins – Excavation ───────────────────────────────────────────
+  if (grepl("^1\\.2\\.5$", wbs)) {
+    qty <- contactors$basin_excav_cy         %||% NA_real_   # qty unit = cy
+    uc  <- contactors$basin_excav_uc         %||% NA_real_
+    tc  <- contactors$basin_excav_cost       %||% NA_real_
+  }
+
+  # ── 1.2.6  GAC Basins – Backfill and Compaction ──────────────────────────────
+  if (grepl("^1\\.2\\.6$", wbs)) {
+    qty <- contactors$basin_backfill_cy      %||% NA_real_   # qty unit = cy
+    uc  <- contactors$basin_backfill_uc      %||% NA_real_
+    tc  <- contactors$basin_backfill_cost    %||% NA_real_
+  }
+
+  # ── 2.1.1  Backwash Tanks ─────────────────────────────────────────────────────
   if (grepl("^2\\.1\\.1$", wbs)) {
-    qty <- tanks$num_backwash_tanks
-    uc  <- if (qty > 0) tanks$backwash_tank_cost / qty else 0
-    tc  <- tanks$backwash_tank_cost
+    qty <- tanks$num_backwash_tanks  %||% 0
+    ds  <- tanks$backwash_tank_volume %||% NA_real_   # gal per tank
+    uc  <- if (!is.na(qty) && qty > 0) (tanks$backwash_tank_cost %||% 0) / qty else NA_real_
+    tc  <- tanks$backwash_tank_cost  %||% NA_real_
   }
-  
-  # --- 2.2 Residuals Tanks ---
+
+  # ── 2.2.1  Residuals Holding Tanks ───────────────────────────────────────────
   if (grepl("^2\\.2\\.1$", wbs)) {
-    qty <- tanks$num_residuals_tanks
-    uc  <- if (qty > 0) tanks$residuals_tank_cost / qty else 0
-    tc  <- tanks$residuals_tank_cost
+    qty <- tanks$num_residuals_tanks  %||% 0
+    ds  <- tanks$residuals_tank_volume %||% NA_real_  # gal per tank
+    uc  <- if (!is.na(qty) && qty > 0) (tanks$residuals_tank_cost %||% 0) / qty else NA_real_
+    tc  <- tanks$residuals_tank_cost  %||% NA_real_
   }
-  
-  # # --- 3.1 Process Piping ---
-  # if (grepl("^3\\.1\\.1$", wbs)) {
-  #   qty <- piping$proc_pipe_length
-  #   uc  <- if (qty > 0) piping$piping_material_cost / piping$piping_length_lf else 0
-  #   tc  <- piping$piping_material_cost
-  # }
-  
-  # # --- 3.2 Backwash Piping ---
-  # if (grepl("^3\\.2\\.1$", wbs)) {
-  #   qty <- piping$back_pipe_length
-  #   uc  <- if (qty > 0) piping$piping_material_cost / piping$piping_length_lf else 0
-  #   tc  <- NA_real_   # included in piping total
-  # }
-  
-  # # --- 3.3 Influent/Treated Water Piping ---
-  # if (grepl("^3\\.3\\.1$", wbs)) {
-  #   qty <- piping$in_out_pipe_length
-  #   uc  <- NA_real_
-  #   tc  <- NA_real_
-  # }
-  
-  # --- 3.1 Process Piping ---
+
+  # ── 3.1.1  Process Piping ─────────────────────────────────────────────────────
   if (grepl("^3\\.1\\.1$", wbs)) {
-    qty <- piping$proc_pipe_length
-    uc  <- if (!is.null(piping$proc_pipe_cost) && qty > 0)
-            piping$proc_pipe_cost / qty
-          else 0
-    tc  <- piping$proc_pipe_cost %||% NA_real_
+    qty <- piping$proc_pipe_length %||% NA_real_
+    ds  <- piping$proc_pipe_diam   %||% NA_real_      # in. diam
+    uc  <- if (!is.null(piping$proc_pipe_cost) && !is.na(qty) && qty > 0)
+             piping$proc_pipe_cost / qty
+           else NA_real_
+    tc  <- piping$proc_pipe_cost   %||% NA_real_
   }
 
-# --- 3.2 Backwash Piping ---
+  # ── 3.2.1  Backwash Piping ────────────────────────────────────────────────────
   if (grepl("^3\\.2\\.1$", wbs)) {
-    qty <- piping$back_pipe_length
-    uc  <- if (!is.null(piping$back_pipe_cost) && qty > 0)
-            piping$back_pipe_cost / qty
-          else 0
-    tc  <- piping$back_pipe_cost %||% NA_real_
+    qty <- piping$back_pipe_length %||% NA_real_
+    ds  <- piping$back_pipe_diam   %||% NA_real_      # in. diam
+    uc  <- if (!is.null(piping$back_pipe_cost) && !is.na(qty) && qty > 0)
+             piping$back_pipe_cost / qty
+           else NA_real_
+    tc  <- piping$back_pipe_cost   %||% NA_real_
   }
 
-# --- 3.3 Influent/Treated Water Piping ---
+  # ── 3.3.1  Influent and Treated Water Piping ─────────────────────────────────
   if (grepl("^3\\.3\\.1$", wbs)) {
-    qty <- piping$in_out_pipe_length
-    uc  <- if (!is.null(piping$in_out_pipe_cost) && qty > 0)
-            piping$in_out_pipe_cost / qty
-          else NA_real_
-    tc  <- piping$in_out_pipe_cost %||% NA_real_
+    qty <- piping$in_out_pipe_length %||% NA_real_
+    ds  <- piping$in_out_pipe_diam   %||% NA_real_    # in. diam
+    uc  <- if (!is.null(piping$in_out_pipe_cost) && !is.na(qty) && qty > 0)
+             piping$in_out_pipe_cost / qty
+           else NA_real_
+    tc  <- piping$in_out_pipe_cost   %||% NA_real_
   }
 
-  # --- 3.4 Residuals Piping ---
+  # ── 3.4.1  Residuals Piping ───────────────────────────────────────────────────
   if (grepl("^3\\.4\\.1$", wbs)) {
-    qty <- piping$res_pipe_length
-    ds <- piping$res_pipe_diam
-    uc  <- if (!is.null(piping$res_pipe_material_cost) && qty > 0)
-           piping$res_pipe_material_cost / qty else NA_real_
-    tc  <- piping$res_pipe_material_cost %||% NA_real_
+    qty <- piping$res_pipe_length          %||% NA_real_
+    ds  <- piping$res_pipe_diam            %||% NA_real_  # in. diam
+    uc  <- if (!is.null(piping$res_pipe_material_cost) && !is.na(qty) && qty > 0)
+             piping$res_pipe_material_cost / qty
+           else NA_real_
+    tc  <- piping$res_pipe_material_cost   %||% NA_real_
   }
 
+  # ── 3.4.2  Residuals Piping – Excavation ─────────────────────────────────────
   if (grepl("^3\\.4\\.2$", wbs)) {
-    qty <- piping$res_trench_vol_cy
-    uc  <- 31
-    tc  <- piping$res_trench_vol_cy * 31
+    qty <- piping$res_trench_vol_cy %||% NA_real_
+    uc  <- 30.879999999999995   # excavate_cost_cl (workbook col3 = 30.88)
+    tc  <- if (!is.na(qty)) qty * uc else NA_real_
   }
 
+  # ── 3.4.3  Residuals Piping – Bedding ────────────────────────────────────────
   if (grepl("^3\\.4\\.3$", wbs)) {
-    qty <- piping$res_bedding_vol_cy
-    uc  <- 45
-    tc  <- piping$res_bedding_vol_cy * 45
+    qty <- piping$res_bedding_vol_cy %||% NA_real_
+    uc  <- 45.35   # pipe_bedding_cost_cl (workbook = 45.35)
+    tc  <- if (!is.na(qty)) qty * uc else NA_real_
   }
+
+  # ── 3.4.5  Residuals Piping – Backfill and Compaction ────────────────────────
+  # Workbook OUTPUT C96 = res_trench_vol (same as excavation, per workbook formula
+  # backfill_cy = excavation_cy in cost equations and piping module).
   if (grepl("^3\\.4\\.5$", wbs)) {
-    # Backfill = trench vol - bedding vol (workbook uses res_trench_vol - res_pipe_bedding_vol)
-  qty <- piping$res_trench_vol_cy - piping$res_bedding_vol_cy
-  uc  <- 19
-  tc  <- qty * 19
+    qty <- piping$res_trench_vol_cy  %||% NA_real_   # = res_trench_vol (workbook C96)
+    uc  <- 18.65   # backfill_cost_cl (workbook col3 = 18.65)
+    tc  <- if (!is.na(qty)) qty * uc else NA_real_
   }
+
+  # ── 3.4.6  Residuals Piping – Thrust Blocks ──────────────────────────────────
   if (grepl("^3\\.4\\.6$", wbs)) {
-    qty <- piping$res_block_vol_cy
-    uc  <- 740
-    tc  <- piping$res_block_vol_cy * 740
+    qty <- piping$res_block_vol_cy %||% NA_real_
+    uc  <- 739.6055887474795   # conc_basin_cost_cl col3 ($/cy)
+    tc  <- if (!is.na(qty)) qty * uc else NA_real_
   }
-  
-  # --- 4. Valves (MOVs) ---
+
+  # ── 4.1.1  MOVs – Process ────────────────────────────────────────────────────
   if (grepl("^4\\.1\\.1$", wbs)) {
     qty <- piping$proc_mov_qty  %||% 0
-    uc  <- if (qty > 0) (piping$proc_mov_cost %||% 0) / qty else 0
-    tc  <- piping$proc_mov_cost %||% 0
+    ds  <- piping$proc_pipe_diam %||% NA_real_
+    uc  <- if (!is.na(qty) && qty > 0) (piping$proc_mov_cost %||% 0) / qty else NA_real_
+    tc  <- piping$proc_mov_cost %||% NA_real_
   }
+
+  # ── 4.1.2  MOVs – Backwash ───────────────────────────────────────────────────
   if (grepl("^4\\.1\\.2$", wbs)) {
     qty <- piping$back_mov_qty  %||% 0
-    uc  <- if (qty > 0) (piping$back_mov_cost %||% 0) / qty else 0
-    tc  <- piping$back_mov_cost %||% 0
+    ds  <- piping$back_pipe_diam %||% NA_real_
+    uc  <- if (!is.na(qty) && qty > 0) (piping$back_mov_cost %||% 0) / qty else NA_real_
+    tc  <- piping$back_mov_cost %||% NA_real_
   }
 
+  # ── 4.1.3  MOVs – Residuals ──────────────────────────────────────────────────
   if (grepl("^4\\.1\\.3$", wbs)) {
-    qty <- piping$res_mov_qty  %||% 0
-    uc  <- if (qty > 0) (piping$res_mov_cost %||% 0) / qty else 0
-    tc  <- piping$res_mov_cost %||% 0
+    qty <- piping$res_mov_qty   %||% 0
+    ds  <- piping$res_pipe_diam  %||% NA_real_
+    uc  <- if (!is.na(qty) && qty > 0) (piping$res_mov_cost %||% 0) / qty else NA_real_
+    tc  <- piping$res_mov_cost  %||% NA_real_
   }
 
+  # ── 4.2.1  Manual Valves – Influent/Treated Water ────────────────────────────
   if (grepl("^4\\.2\\.1$", wbs)) {
-    qty <- piping$in_man_qty   %||% 0
-    uc  <- if (qty > 0) (piping$in_man_cost   %||% 0) / qty else 0
-    tc  <- piping$in_man_cost  %||% 0
+    qty <- piping$in_man_qty    %||% 0
+    ds  <- piping$in_out_pipe_diam %||% NA_real_
+    uc  <- if (!is.na(qty) && qty > 0) (piping$in_man_cost %||% 0) / qty else NA_real_
+    tc  <- piping$in_man_cost   %||% NA_real_
   }
+
+  # ── 4.2.2  Manual Valves – Process ───────────────────────────────────────────
   if (grepl("^4\\.2\\.2$", wbs)) {
-    qty <- piping$proc_man_qty %||% 0
-    uc  <- if (qty > 0) (piping$proc_man_cost  %||% 0) / qty else 0
-    tc  <- piping$proc_man_cost %||% 0
+    qty <- piping$proc_man_qty  %||% 0
+    ds  <- piping$proc_pipe_diam %||% NA_real_
+    uc  <- if (!is.na(qty) && qty > 0) (piping$proc_man_cost %||% 0) / qty else NA_real_
+    tc  <- piping$proc_man_cost %||% NA_real_
   }
+
+  # ── 4.2.3  Manual Valves – Backwash ──────────────────────────────────────────
   if (grepl("^4\\.2\\.3$", wbs)) {
-    qty <- piping$back_man_qty %||% 0
-    uc  <- if (qty > 0) (piping$back_man_cost  %||% 0) / qty else 0
-    tc  <- piping$back_man_cost %||% 0
+    qty <- piping$back_man_qty  %||% 0
+    ds  <- piping$back_pipe_diam %||% NA_real_
+    uc  <- if (!is.na(qty) && qty > 0) (piping$back_man_cost %||% 0) / qty else NA_real_
+    tc  <- piping$back_man_cost %||% NA_real_
   }
+
+  # ── 4.2.4  Manual Valves – Residuals ─────────────────────────────────────────
   if (grepl("^4\\.2\\.4$", wbs)) {
-    qty <- piping$res_man_qty  %||% 0
-    uc  <- if (qty > 0) (piping$res_man_cost   %||% 0) / qty else 0
-    tc  <- piping$res_man_cost %||% 0
+    qty <- piping$res_man_qty   %||% 0
+    ds  <- piping$res_pipe_diam  %||% NA_real_
+    uc  <- if (!is.na(qty) && qty > 0) (piping$res_man_cost %||% 0) / qty else NA_real_
+    tc  <- piping$res_man_cost  %||% NA_real_
   }
-  
+
+  # ── 4.3.1  Check Valves – Backwash ───────────────────────────────────────────
   if (grepl("^4\\.3\\.1$", wbs)) {
     qty <- piping$back_chv_qty  %||% 0
-    uc  <- if (qty > 0) (piping$back_chv_cost %||% 0) / qty else 0
-    tc  <- piping$back_chv_cost %||% 0
+    ds  <- piping$back_pipe_diam %||% NA_real_
+    uc  <- if (!is.na(qty) && qty > 0) (piping$back_chv_cost %||% 0) / qty else NA_real_
+    tc  <- piping$back_chv_cost %||% NA_real_
   }
+
+  # ── 4.3.2  Check Valves – Residuals ──────────────────────────────────────────
   if (grepl("^4\\.3\\.2$", wbs)) {
     qty <- piping$res_chv_qty   %||% 0
-    uc  <- if (qty > 0) (piping$res_chv_cost  %||% 0) / qty else 0
-    tc  <- piping$res_chv_cost  %||% 0
+    ds  <- piping$res_pipe_diam  %||% NA_real_
+    uc  <- if (!is.na(qty) && qty > 0) (piping$res_chv_cost %||% 0) / qty else NA_real_
+    tc  <- piping$res_chv_cost  %||% NA_real_
   }
+
+  # ── 4.3.5  Check Valves – Influent ───────────────────────────────────────────
   if (grepl("^4\\.3\\.5$", wbs)) {
     qty <- piping$in_chv_qty    %||% 0
-    uc  <- if (qty > 0) (piping$in_chv_cost   %||% 0) / qty else 0
-    tc  <- piping$in_chv_cost   %||% 0
+    ds  <- piping$in_out_pipe_diam %||% NA_real_
+    uc  <- if (!is.na(qty) && qty > 0) (piping$in_chv_cost %||% 0) / qty else NA_real_
+    tc  <- piping$in_chv_cost   %||% NA_real_
   }
-  
-  # --- 5. Pumps ---
-  # Workbook cost equation: pump_cost(Q) = -0.00067003*Q^2 + 14.80901498*Q + 4093.494684836
-  # Q = pump rating in gpm; returns 0 when Q = 0 (qty=0 row shows "--")
+
+  # ── 5.1  Booster Pumps ───────────────────────────────────────────────────────
+  # Workbook: pump_cost(Q) = -0.00067003*Q^2 + 14.80901498*Q + 4093.494684836
   pump_cost_eq <- function(Q) {
-    Q <- Q %||% 0
-    if (Q <= 0) return(0)
+    Q <- as.numeric(Q %||% 0)
+    if (is.na(Q) || Q <= 0) return(NA_real_)
     -0.00067003 * Q^2 + 14.80901498 * Q + 4093.494684836
   }
   if (grepl("^5\\.1$", wbs)) {
     qty <- pumps$service_pumps   %||% 0
+    ds  <- pumps$pump_rating      %||% NA_real_
     uc  <- pump_cost_eq(pumps$pump_rating      %||% 0)
-    tc  <- qty * uc
+    tc  <- if (!is.na(qty) && qty > 0) qty * uc else NA_real_
   }
+
+  # ── 5.2  Backwash Pumps ──────────────────────────────────────────────────────
   if (grepl("^5\\.2$", wbs)) {
     qty <- pumps$backwash_pumps  %||% 0
+    ds  <- pumps$back_pump_rating %||% NA_real_
     uc  <- pump_cost_eq(pumps$back_pump_rating %||% 0)
-    tc  <- qty * uc
+    tc  <- if (!is.na(qty) && qty > 0) qty * uc else NA_real_
   }
+
+  # ── 5.3  Residuals Pumps ─────────────────────────────────────────────────────
   if (grepl("^5\\.3$", wbs)) {
     qty <- pumps$residuals_pumps %||% 0
+    ds  <- pumps$res_pump_rating  %||% NA_real_
     uc  <- pump_cost_eq(pumps$res_pump_rating  %||% 0)
-    tc  <- qty * uc
+    tc  <- if (!is.na(qty) && qty > 0) qty * uc else NA_real_
   }
-  
-  # --- 6. Instrumentation ---
-  # Flow meter costs: polynomial M*d^2 + N*d + O (Cost Equations rows 143-161)
-  # Fixed item costs from Cost Data lookup tables
-  # All four meter subtypes are populated; the selected one has col12=1 in workbook
 
-  # 6.1.x  Flow Meters – Influent and Treated Water
+  # ── 6.1.1  Flow Meters – Influent and Treated Water ──────────────────────────
   if (grepl("^6\\.1\\.1$", wbs)) {
-    if (grepl("orifice", item_lower)) {
-      qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_op_uc   %||% 0; tc <- qty * uc
-    } else if (grepl("propeller", item_lower)) {
-      qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_prop_uc %||% 0; tc <- qty * uc
-    } else if (grepl("venturi", item_lower)) {
-      qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_ven_uc  %||% 0; tc <- qty * uc
-    } else if (grepl("magnetic", item_lower)) {
-      qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_mag_uc  %||% 0; tc <- qty * uc
-    }
+    ds  <- piping$in_out_pipe_diam %||% NA_real_
+    if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_op_uc   %||% 0 }
+    else if (grepl("propeller", item_lower)) { qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_prop_uc %||% 0 }
+    else if (grepl("venturi",   item_lower)) { qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_ven_uc  %||% 0 }
+    else if (grepl("magnetic",  item_lower)) { qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_mag_uc  %||% 0 }
+    if (!is.na(qty)) tc <- qty * uc
   }
 
-  # 6.2.x  Flow Meters – Process
+  # ── 6.2.1  Flow Meters – Process ─────────────────────────────────────────────
   if (grepl("^6\\.2\\.1$", wbs)) {
-    if (grepl("orifice", item_lower)) {
-      qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_op_uc   %||% 0; tc <- qty * uc
-    } else if (grepl("propeller", item_lower)) {
-      qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_prop_uc %||% 0; tc <- qty * uc
-    } else if (grepl("venturi", item_lower)) {
-      qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_ven_uc  %||% 0; tc <- qty * uc
-    } else if (grepl("magnetic", item_lower)) {
-      qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_mag_uc  %||% 0; tc <- qty * uc
-    }
+    ds  <- piping$proc_pipe_diam %||% NA_real_
+    if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_op_uc   %||% 0 }
+    else if (grepl("propeller", item_lower)) { qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_prop_uc %||% 0 }
+    else if (grepl("venturi",   item_lower)) { qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_ven_uc  %||% 0 }
+    else if (grepl("magnetic",  item_lower)) { qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_mag_uc  %||% 0 }
+    if (!is.na(qty)) tc <- qty * uc
   }
 
-  # 6.3.x  Flow Meters – Backwash
+  # ── 6.3.1  Flow Meters – Backwash ────────────────────────────────────────────
   if (grepl("^6\\.3\\.1$", wbs)) {
-    if (grepl("orifice", item_lower)) {
-      qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_op_uc   %||% 0; tc <- qty * uc
-    } else if (grepl("propeller", item_lower)) {
-      qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_prop_uc %||% 0; tc <- qty * uc
-    } else if (grepl("venturi", item_lower)) {
-      qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_ven_uc  %||% 0; tc <- qty * uc
-    } else if (grepl("magnetic", item_lower)) {
-      qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_mag_uc  %||% 0; tc <- qty * uc
-    }
+    ds  <- piping$back_pipe_diam %||% NA_real_
+    if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_op_uc   %||% 0 }
+    else if (grepl("propeller", item_lower)) { qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_prop_uc %||% 0 }
+    else if (grepl("venturi",   item_lower)) { qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_ven_uc  %||% 0 }
+    else if (grepl("magnetic",  item_lower)) { qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_mag_uc  %||% 0 }
+    if (!is.na(qty)) tc <- qty * uc
   }
 
-  # 6.4.x  Flow Meters – Residuals
+  # ── 6.4.1  Flow Meters – Residuals ───────────────────────────────────────────
   if (grepl("^6\\.4\\.1$", wbs)) {
-    if (grepl("orifice", item_lower)) {
-      qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_op_uc   %||% 0; tc <- qty * uc
-    } else if (grepl("propeller", item_lower)) {
-      qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_prop_uc %||% 0; tc <- qty * uc
-    } else if (grepl("venturi", item_lower)) {
-      qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_ven_uc  %||% 0; tc <- qty * uc
-    } else if (grepl("magnetic", item_lower)) {
-      qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_mag_uc  %||% 0; tc <- qty * uc
-    }
+    ds  <- piping$res_pipe_diam %||% NA_real_
+    if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_op_uc   %||% 0 }
+    else if (grepl("propeller", item_lower)) { qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_prop_uc %||% 0 }
+    else if (grepl("venturi",   item_lower)) { qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_ven_uc  %||% 0 }
+    else if (grepl("magnetic",  item_lower)) { qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_mag_uc  %||% 0 }
+    if (!is.na(qty)) tc <- qty * uc
   }
 
-  # 6.5  Level Switches/Alarms (for vessels)
+  # ── 6.5  Level Switches/Alarms ────────────────────────────────────────────────
   if (grepl("^6\\.5$", wbs)) {
     qty <- controls$tot_level_switch  %||% 0
     uc  <- controls$level_switch_uc   %||% 0
     tc  <- controls$level_switch_cost %||% 0
   }
 
-  # 6.6  High/Low Alarms (for backwash tanks)
+  # ── 6.6  High/Low Alarms – Backwash Tanks ────────────────────────────────────
   if (grepl("^6\\.6$", wbs)) {
     qty <- controls$tot_back_alarm  %||% 0
     uc  <- controls$back_alarm_uc   %||% 0
     tc  <- controls$back_alarm_cost %||% 0
   }
 
-  # 6.7  High/Low Alarm (for holding tanks)
+  # ── 6.7  High/Low Alarm – Residuals Holding Tanks ────────────────────────────
   if (grepl("^6\\.7$", wbs)) {
     qty <- controls$tot_res_alarm  %||% 0
     uc  <- controls$res_alarm_uc   %||% 0
     tc  <- controls$res_alarm_cost %||% 0
   }
 
-  # 6.8  pH Meters
+  # ── 6.8  pH Meters ───────────────────────────────────────────────────────────
   if (grepl("^6\\.8$", wbs)) {
     qty <- controls$pH_controls %||% 0
     uc  <- controls$pH_meter_uc %||% 0
     tc  <- controls$pH_cost     %||% 0
   }
 
-  # 6.9  Temperature meters
+  # ── 6.9  Temperature Meters ──────────────────────────────────────────────────
   if (grepl("^6\\.9$", wbs)) {
     qty <- controls$tot_temp_meters %||% 0
     uc  <- controls$temp_meter_uc   %||% 0
     tc  <- controls$temp_cost       %||% 0
   }
 
-  # 6.10  Turbidity meters
+  # ── 6.10  Turbidity Meters ────────────────────────────────────────────────────
   if (grepl("^6\\.10$", wbs)) {
     qty <- controls$tot_turb_meters %||% 0
     uc  <- controls$turb_meter_uc   %||% 0
     tc  <- controls$turb_cost       %||% 0
   }
 
-  # 6.11  Head loss sensors
+  # ── 6.11  Head Loss Sensors ───────────────────────────────────────────────────
   if (grepl("^6\\.11$", wbs)) {
     qty <- controls$tot_head_sens  %||% 0
     uc  <- controls$headloss_uc    %||% 0
     tc  <- controls$headloss_cost  %||% 0
   }
 
-  # 6.12.1  Sampling Ports
+  # ── 6.12.1  Sampling Ports ───────────────────────────────────────────────────
   if (grepl("^6\\.12\\.1$", wbs)) {
     qty <- controls$ports       %||% 0
     uc  <- controls$sampling_uc %||% 0
-    tc  <- qty * uc
+    tc  <- if (!is.na(qty)) qty * uc else NA_real_
   }
 
-  # 6.13  Electrical enclosure
+  # ── 6.13  Electrical Enclosure ────────────────────────────────────────────────
   if (grepl("^6\\.13$", wbs)) {
     qty <- controls$elec_encl      %||% 0
     uc  <- controls$elec_encl_uc   %||% 0
     tc  <- controls$elec_encl_cost %||% 0
   }
 
-    # --- 7. System Controls ---
-  # 7.1.1  PLC racks/power supplies
-  if (grepl("^7\\.1\\.1$", wbs)) {
-    qty <- controls$qty_7_1_1 %||% 0
-    uc  <- controls$uc_plc_rack %||% 0
-    tc  <- qty * uc
-  }
+  # ── 7.1.1  PLC racks/power supplies ──────────────────────────────────────────
+  if (grepl("^7\\.1\\.1$", wbs)) { qty <- controls$qty_7_1_1 %||% 0; uc <- controls$uc_plc_rack              %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.1\\.2$", wbs)) { qty <- controls$qty_7_1_2 %||% 0; uc <- controls$uc_plc_cpu               %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.1\\.3$", wbs)) { qty <- controls$qty_7_1_3 %||% 0; uc <- controls$uc_plc_discrete_input    %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.1\\.4$", wbs)) { qty <- controls$qty_7_1_4 %||% 0; uc <- controls$uc_plc_discrete_output   %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.1\\.5$", wbs)) { qty <- controls$qty_7_1_5 %||% 0; uc <- controls$uc_plc_combination_analog%||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.1\\.6$", wbs)) { qty <- controls$qty_7_1_6 %||% 0; uc <- controls$uc_plc_ethernet          %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.1\\.7$", wbs)) { qty <- controls$qty_7_1_7 %||% 0; uc <- controls$uc_plc_base_expansion    %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.1\\.8$", wbs)) { qty <- controls$qty_7_1_8 %||% 0; uc <- controls$uc_plc_base_expansion_ctrl%||%0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.1\\.9$", wbs)) { qty <- controls$qty_7_1_9 %||% 0; uc <- controls$uc_ups                   %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.2\\.1$", wbs)) { qty <- controls$qty_7_2_1 %||% 0; uc <- controls$uc_switch                %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.2\\.2$", wbs)) { qty <- controls$qty_7_2_2 %||% 0; uc <- controls$uc_plc_op_interface      %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.2\\.3$", wbs)) { qty <- controls$qty_7_2_3 %||% 0; uc <- controls$uc_pc_workstation        %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.2\\.4$", wbs)) { qty <- controls$qty_7_2_4 %||% 0; uc <- controls$uc_laser_printer         %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.3\\.1$", wbs)) { qty <- controls$qty_7_3_1 %||% 0; uc <- controls$uc_op_interface_software %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.3\\.2$", wbs)) { qty <- controls$qty_7_3_2 %||% 0; uc <- controls$uc_plc_software          %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.3\\.3$", wbs)) { qty <- controls$qty_7_3_3 %||% 0; uc <- controls$uc_plc_data_software     %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
+  if (grepl("^7\\.3\\.4$", wbs)) { qty <- controls$qty_7_3_4 %||% 0; uc <- controls$uc_plant_intel_software  %||% 0; tc <- if (!is.na(qty)) qty * uc else NA_real_ }
 
-  # 7.1.2  CPUs
-  if (grepl("^7\\.1\\.2$", wbs)) {
-    qty <- controls$qty_7_1_2 %||% 0
-    uc  <- controls$uc_plc_cpu %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.1.3  I/O discrete input modules
-  if (grepl("^7\\.1\\.3$", wbs)) {
-    qty <- controls$qty_7_1_3 %||% 0
-    uc  <- controls$uc_plc_discrete_input %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.1.4  I/O discrete output modules
-  if (grepl("^7\\.1\\.4$", wbs)) {
-    qty <- controls$qty_7_1_4 %||% 0
-    uc  <- controls$uc_plc_discrete_output %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.1.5  I/O combination analog modules
-  if (grepl("^7\\.1\\.5$", wbs)) {
-    qty <- controls$qty_7_1_5 %||% 0
-    uc  <- controls$uc_plc_combination_analog %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.1.6  Ethernet modules
-  if (grepl("^7\\.1\\.6$", wbs)) {
-    qty <- controls$qty_7_1_6 %||% 0
-    uc  <- controls$uc_plc_ethernet %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.1.7  Base expansion modules
-  if (grepl("^7\\.1\\.7$", wbs)) {
-    qty <- controls$qty_7_1_7 %||% 0
-    uc  <- controls$uc_plc_base_expansion %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.1.8  Base expansion controller modules
-  if (grepl("^7\\.1\\.8$", wbs)) {
-    qty <- controls$qty_7_1_8 %||% 0
-    uc  <- controls$uc_plc_base_expansion_ctrl %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.1.9  UPSs
-  if (grepl("^7\\.1\\.9$", wbs)) {
-    qty <- controls$qty_7_1_9 %||% 0
-    uc  <- controls$uc_ups %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.2.1  Drive controllers
-  if (grepl("^7\\.2\\.1$", wbs)) {
-    qty <- controls$qty_7_2_1 %||% 0
-    uc  <- controls$uc_switch %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.2.2  Operator interface units
-  if (grepl("^7\\.2\\.2$", wbs)) {
-    qty <- controls$qty_7_2_2 %||% 0
-    uc  <- controls$uc_plc_op_interface %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.2.3  PC Workstations
-  if (grepl("^7\\.2\\.3$", wbs)) {
-    qty <- controls$qty_7_2_3 %||% 0
-    uc  <- controls$uc_pc_workstation %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.2.4  Printers - laser jet
-  if (grepl("^7\\.2\\.4$", wbs)) {
-    qty <- controls$qty_7_2_4 %||% 0
-    uc  <- controls$uc_laser_printer %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.3.1  Operator interface software
-  if (grepl("^7\\.3\\.1$", wbs)) {
-    qty <- controls$qty_7_3_1 %||% 0
-    uc  <- controls$uc_op_interface_software %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.3.2  PLC programming software
-  if (grepl("^7\\.3\\.2$", wbs)) {
-    qty <- controls$qty_7_3_2 %||% 0
-    uc  <- controls$uc_plc_software %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.3.3  PLC data collection software
-  if (grepl("^7\\.3\\.3$", wbs)) {
-    qty <- controls$qty_7_3_3 %||% 0
-    uc  <- controls$uc_plc_data_software %||% 0
-    tc  <- qty * uc
-  }
-
-  # 7.3.4  Plant intelligence software
-  if (grepl("^7\\.3\\.4$", wbs)) {
-    qty <- controls$qty_7_3_4 %||% 0
-    uc  <- controls$uc_plant_intel_software %||% 0
-    tc  <- qty * uc
-  }
-
-
-  # --- 8.1.1  GAC Solids Transfer ---
+  # ── 8.1.1  GAC Solids Transfer ───────────────────────────────────────────────
   if (grepl("^8\\.1\\.1$", wbs)) {
     qty <- chem_feed$qty_8_1_1 %||% 0
+    ds  <- chem_feed$ds_8_1_1  %||% NA_real_  # transfer_rate (lbs/hr) or eductor_size (in. diam)
     uc  <- chem_feed$uc_8_1_1
     tc  <- chem_feed$tc_8_1_1
   }
 
-  # --- 8.1.2  Residuals Holding Tank Transfer ---
+  # ── 8.1.2  Residuals Holding Tank Transfer ────────────────────────────────────
   if (grepl("^8\\.1\\.2$", wbs)) {
     qty <- chem_feed$qty_8_1_2 %||% 0
+    ds  <- chem_feed$ds_8_1_2  %||% NA_real_  # res_transfer_rate (lbs/hr) or res_eductor_size
     uc  <- chem_feed$uc_8_1_2
     tc  <- chem_feed$tc_8_1_2
   }
 
-  # --- 8.2.1  Residuals Mixers ---
-  if (grepl("^8\\.2\\.1$", wbs) && grepl("portable", item_lower)) {
+  # ── 8.2.1  Residuals Mixers ───────────────────────────────────────────────────
+  if (grepl("^8\\.2\\.1$", wbs)) {
     qty <- chem_feed$qty_8_2_1 %||% 0
-    uc  <- chem_feed$uc_8_2_1_portable
-    tc  <- chem_feed$tc_8_2_1_portable
-  }
-  if (grepl("^8\\.2\\.1$", wbs) && grepl("mounted", item_lower)) {
-    qty <- chem_feed$qty_8_2_1 %||% 0
-    uc  <- chem_feed$uc_8_2_1_mounted
-    tc  <- chem_feed$tc_8_2_1_mounted
-  }
-  if (grepl("^8\\.2\\.1$", wbs) && grepl("impeller", item_lower)) {
-    qty <- chem_feed$qty_8_2_1 %||% 0
-    uc  <- chem_feed$uc_8_2_1_impeller
-    tc  <- chem_feed$tc_8_2_1_impeller
+    ds  <- chem_feed$ds_8_2_1  %||% NA_real_  # hmix_size (hp)
+    if      (grepl("portable", item_lower)) { uc <- chem_feed$uc_8_2_1_portable; tc <- chem_feed$tc_8_2_1_portable }
+    else if (grepl("mounted",  item_lower)) { uc <- chem_feed$uc_8_2_1_mounted;  tc <- chem_feed$tc_8_2_1_mounted  }
+    else if (grepl("impeller", item_lower)) { uc <- chem_feed$uc_8_2_1_impeller; tc <- chem_feed$tc_8_2_1_impeller }
   }
 
-  # --- 8.4.1  Ferric Chloride Mixers ---
-  if (grepl("^8\\.4\\.1$", wbs) && grepl("portable", item_lower)) {
+  # ── 8.4.1  Ferric Chloride Mixers ────────────────────────────────────────────
+  if (grepl("^8\\.4\\.1$", wbs)) {
     qty <- chem_feed$qty_8_4_1 %||% 0
-    uc  <- chem_feed$uc_8_4_1_portable
-    tc  <- chem_feed$tc_8_4_1_portable
-  }
-  if (grepl("^8\\.4\\.1$", wbs) && grepl("mounted", item_lower)) {
-    qty <- chem_feed$qty_8_4_1 %||% 0
-    uc  <- chem_feed$uc_8_4_1_mounted
-    tc  <- chem_feed$tc_8_4_1_mounted
-  }
-  if (grepl("^8\\.4\\.1$", wbs) && grepl("impeller", item_lower)) {
-    qty <- chem_feed$qty_8_4_1 %||% 0
-    uc  <- chem_feed$uc_8_4_1_impeller
-    tc  <- chem_feed$tc_8_4_1_impeller
+    ds  <- chem_feed$ds_8_4_1  %||% NA_real_  # coag_cmix_size (hp)
+    if      (grepl("portable", item_lower)) { uc <- chem_feed$uc_8_4_1_portable; tc <- chem_feed$tc_8_4_1_portable }
+    else if (grepl("mounted",  item_lower)) { uc <- chem_feed$uc_8_4_1_mounted;  tc <- chem_feed$tc_8_4_1_mounted  }
+    else if (grepl("impeller", item_lower)) { uc <- chem_feed$uc_8_4_1_impeller; tc <- chem_feed$tc_8_4_1_impeller }
   }
 
-  # --- 8.5.1  Polymer Mixers ---
-  if (grepl("^8\\.5\\.1$", wbs) && grepl("portable", item_lower)) {
+  # ── 8.5.1  Polymer Mixers ────────────────────────────────────────────────────
+  if (grepl("^8\\.5\\.1$", wbs)) {
     qty <- chem_feed$qty_8_5_1 %||% 0
-    uc  <- chem_feed$uc_8_5_1_portable
-    tc  <- chem_feed$tc_8_5_1_portable
-  }
-  if (grepl("^8\\.5\\.1$", wbs) && grepl("mounted", item_lower)) {
-    qty <- chem_feed$qty_8_5_1 %||% 0
-    uc  <- chem_feed$uc_8_5_1_mounted
-    tc  <- chem_feed$tc_8_5_1_mounted
-  }
-  if (grepl("^8\\.5\\.1$", wbs) && grepl("impeller", item_lower)) {
-    qty <- chem_feed$qty_8_5_1 %||% 0
-    uc  <- chem_feed$uc_8_5_1_impeller
-    tc  <- chem_feed$tc_8_5_1_impeller
+    ds  <- chem_feed$ds_8_5_1  %||% NA_real_  # polymer_cmix_size (hp)
+    if      (grepl("portable", item_lower)) { uc <- chem_feed$uc_8_5_1_portable; tc <- chem_feed$tc_8_5_1_portable }
+    else if (grepl("mounted",  item_lower)) { uc <- chem_feed$uc_8_5_1_mounted;  tc <- chem_feed$tc_8_5_1_mounted  }
+    else if (grepl("impeller", item_lower)) { uc <- chem_feed$uc_8_5_1_impeller; tc <- chem_feed$tc_8_5_1_impeller }
   }
 
-    # --- 9.1 Initial GAC Charge ---
+  # ── 9.1  Initial GAC Charge ──────────────────────────────────────────────────
+  # qty = total GAC mass (lbs), uc = $/lb, tc = initial fill cost
   if (grepl("^9\\.1$", wbs)) {
-    qty <- gac$total_gac_mass_lb
-    uc  <- gac$gac_unit_cost
-    tc  <- gac$initial_fill_cost
+    qty <- gac$total_gac_mass_lb  %||% NA_real_
+    uc  <- gac$gac_unit_cost      %||% NA_real_
+    tc  <- gac$initial_fill_cost  %||% NA_real_
   }
-  
-  # --- 14.5 Concrete Pad ---
-  # qty = concrete cy; uc = VLOOKUP(0, conc_pad_cost_cl, 3) = $492.75 fixed
+
+  # ── 14.1.1 / 14.2.1 / 14.3.1 / 14.4.1  Buildings ────────────────────────────
+  # Design Size = building footprint (sf); unit cost from bpcost_ubc97 polynomial
+  if (grepl("^14\\.[1-4]\\.1$", wbs)) {
+    qty <- 1L                                          # always 1 building
+    ds  <- site$building_footprint_sf %||% NA_real_   # sf
+    uc  <- site$building_uc           %||% NA_real_   # $/sf equivalent (total/sf)
+    tc  <- site$building_cost         %||% NA_real_
+  }
+
+  # ── 14.5  Concrete Pad ───────────────────────────────────────────────────────
+  # qty = 1 unit; design_size = volume in cy; uc = $492.75/cy (VLOOKUP constant)
   if (grepl("^14\\.5$", wbs)) {
     qty <- site$concrete_pad_qty %||% 0
+    ds  <- site$concrete_pad_qty %||% NA_real_         # cy (same as qty here)
     uc  <- site$concrete_pad_uc  %||% NA_real_
     tc  <- site$concrete_pad_tc  %||% NA_real_
   }
-  
-  # Workbook rule: IF(qty=0, uc="NA", tc="--") — mirror by setting uc/tc to NA when qty=0
+
+  # ── Workbook rule: qty == 0 → uc and tc become NA ("--" display) ─────────────
   if (!is.na(qty) && isTRUE(qty == 0)) {
     uc <- NA_real_
     tc <- NA_real_
   }
 
-  list(quantity = qty, design_size = ds, unit_cost = uc, total_cost = tc)
+  list(quantity = qty, design_size = ds, unit_cost = uc, total_cost = tc,
+       useful_life = ul)
 }
 
 
@@ -837,21 +911,90 @@ build_wbs_table <- function(data) {
   cost_selection <- stringr::str_to_lower(contactors$component_level_name)
   priority_col   <- resolve_priority_col(size_selection, cost_selection)
   
-  # ── Stage 1: Load Sheet23 and filter by num_row (priority selection) ──────
-  baseline <- get_sheet_data("baseline_priority_selection", return_type = "table")
-  
-  # The selected num_row for this size × cost combination
-  selected_num_row <- baseline |>
-    dplyr::filter(grepl(size_selection, size, ignore.case = TRUE)) |>
-    dplyr::mutate(row_index = dplyr::row_number()) |>
-    dplyr::filter(!!rlang::sym(cost_selection)==1) |>
-    dplyr::pull(row_index)
-  
+  # ── Stage 1: Load Sheet23 and filter by priority selection ───────────────
+  # Use priority_selection_table.csv to determine the selected material for
+  # each WBS group (item with rank = 1 for the given size × cost combination).
+  #
+  # priority_selection_table.csv columns:
+  #   WBS, Item, Small_Low, Small_Mid, Small_High,
+  #              Medium_Low, Medium_Mid, Medium_High,
+  #              Large_Low,  Large_Mid,  Large_High
+  # Values are rank numbers (1 = selected for that combination).
+
+  # Build the priority column name, e.g. "Small_Low"
+  size_key_ps <- dplyr::case_when(
+    grepl("small",  size_selection, ignore.case = TRUE) ~ "Small",
+    grepl("medium", size_selection, ignore.case = TRUE) ~ "Medium",
+    grepl("large",  size_selection, ignore.case = TRUE) ~ "Large",
+    .default = "Small"
+  )
+  cost_key_ps <- stringr::str_to_title(trimws(cost_selection))  # "Low"/"Mid"/"High"
+  priority_col_name <- paste0(size_key_ps, "_", cost_key_ps)    # e.g. "Small_Low"
+
+  # Load the priority table (CSV ships with the app)
+  ps_csv_path <- "priority_selection_table.csv"
+  priorities_ps <- read.csv(ps_csv_path, stringsAsFactors = FALSE, check.names = FALSE)
+
+  # For each WBS group, find the item whose rank == 1 (= the chosen material)
+  selected_items_ps <- priorities_ps |>
+    dplyr::mutate(ps_rank = suppressWarnings(
+                    as.numeric(.data[[priority_col_name]]))) |>
+    dplyr::filter(!is.na(ps_rank)) |>
+    dplyr::group_by(WBS) |>
+    dplyr::slice_min(ps_rank, n = 1, with_ties = FALSE) |>
+    dplyr::ungroup() |>
+    dplyr::select(WBS, Item)
+
+  # ── Override WBS 1.1.1 with the effective vessel material ─────────────────
+  # calculate_contactors returns `vessel_material` which already accounts for
+  # the "contact vendor" cascade (e.g. FG priority-1 is skipped when vessel
+  # volume > 901 gal, and the app uses CSP instead — matching CompSelect).
+  # Use that result to ensure the WBS table shows the material that was actually
+  # priced, not just the static priority-1 item from the CSV.
+  eff_mat <- contactors$vessel_material
+  if (!is.null(eff_mat) && !is.na(eff_mat) && nchar(trimws(eff_mat)) > 0) {
+    material_to_item_1_1_1 <- c(
+      "FG"  = "Fiberglass",
+      "CSP" = "Carbon Steel - Plastic Internals",
+      "CS"  = "Carbon Steel - Stainless Internals",
+      "SS"  = "Stainless Steel"
+    )
+    eff_item <- material_to_item_1_1_1[eff_mat]
+    if (!is.na(eff_item)) {
+      selected_items_ps <- selected_items_ps |>
+        dplyr::filter(WBS != "1.1.1") |>
+        dplyr::bind_rows(
+          data.frame(WBS = "1.1.1", Item = as.character(eff_item),
+                     stringsAsFactors = FALSE)
+        )
+      message(sprintf("[WBS Stage1] WBS 1.1.1 overridden to '%s' (effective material: %s)",
+                      eff_item, eff_mat))
+    }
+  }
+
+  # Load Sheet23 (all WBS rows with cost data)
   df <- get_sheet_data("Sheet23", return_type = "table") |>
     janitor::clean_names() |>
-    dplyr::mutate(row_index = dplyr::row_number()) |>
+    dplyr::mutate(row_index = dplyr::row_number())
+
+  # Keep a row when:
+  #   (a) its WBS group does not appear in the priority table at all
+  #       (section headers, single-option items, etc.), OR
+  #   (b) its (wbs, item) matches the priority-1 item for this size × cost.
+  #
+  # Matching is case-insensitive on both sides to tolerate minor capitalisation
+  # differences between the CSV and the Google Sheet.
+  wbs_in_ps <- tolower(trimws(selected_items_ps$WBS))
+  selected_pairs_ps <- paste0(
+    tolower(trimws(selected_items_ps$WBS)), "|||",
+    tolower(trimws(selected_items_ps$Item))
+  )
+
+  df <- df |>
     dplyr::filter(
-      row_index %in% selected_num_row  # keep items matching priority selection
+      !(tolower(trimws(wbs)) %in% wbs_in_ps) |
+      (paste0(tolower(trimws(wbs)), "|||",
+              tolower(trimws(item))) %in% selected_pairs_ps)
     )
   
   # ── Stage 2: Applicability filter ─────────────────────────────────────────
@@ -878,24 +1021,78 @@ build_wbs_table <- function(data) {
   
   df <- df |>
     dplyr::mutate(
-      design_quantity = purrr::map_dbl(values, ~ .x$quantity %||% NA_real_),
+      design_quantity = purrr::map_dbl(values, ~ .x$quantity    %||% NA_real_),
       design_size     = purrr::map_dbl(values, ~ .x$design_size %||% NA_real_),
-      unit_cost       = purrr::map_dbl(values, ~ .x$unit_cost %||% NA_real_),
-      total_cost      = purrr::map_dbl(values, ~ .x$total_cost %||% NA_real_)
+      unit_cost       = purrr::map_dbl(values, ~ .x$unit_cost   %||% NA_real_),
+      total_cost      = purrr::map_dbl(values, ~ .x$total_cost  %||% NA_real_),
+      useful_life     = purrr::map_dbl(values, ~ .x$useful_life %||% NA_real_)
     )
-  
+
+  # ── Post-process: 3.4.2 / 3.4.3 / 3.4.5 / 3.4.6 inherit UL from 3.4.1 ──
+  # Workbook formula: IF(unit_cost="NA","N/A", use K of whichever 3.4.1
+  # material is selected).  We just copy the UL we already computed for 3.4.1.
+  ul_341 <- df$useful_life[grepl("^3\\.4\\.1$", trimws(df$wbs))]
+  ul_341 <- if (length(ul_341) > 0 && !is.na(ul_341[1])) ul_341[1] else NA_real_
   df <- df |>
+    dplyr::mutate(
+      useful_life = dplyr::if_else(
+        grepl("^3\\.4\\.[2356]$", trimws(wbs)) & !is.na(unit_cost),
+        ul_341,
+        useful_life
+      )
+    )
+
+  # ── Join qty_unit / size_unit from static CSV ─────────────────────────────
+  # wbs_design_units.csv maps each WBS number to the unit labels for
+  # Design Quantity (e.g. "units", "lf", "cy") and Design Size ("gal", "in. diam").
+  du_csv_path <- "wbs_design_units.csv"
+  if (file.exists(du_csv_path)) {
+    du <- read.csv(du_csv_path, stringsAsFactors = FALSE, check.names = FALSE) |>
+      dplyr::mutate(wbs = trimws(as.character(wbs)))
+    df <- df |>
+      dplyr::left_join(du, by = "wbs")
+  } else {
+    df$qty_unit  <- NA_character_
+    df$size_unit <- NA_character_
+  }
+
+  # ── Override size_used_in_estimate with computed design_size ──────────────
+  # The workbook's "Size Used in Estimate" column equals Design Size for every
+  # active row.  Replace the static Sheet23 value with the live calculated one.
+  # Also duplicate size_unit for the "Size used in estimate" unit column — the
+  # workbook repeats the same unit label in columns F and H (Design Size Units).
+  df <- df |>
+    dplyr::mutate(
+      size_used_in_estimate = dplyr::if_else(
+        !is.na(design_size), design_size, as.numeric(size_used_in_estimate)
+      ),
+      size_unit_sue = size_unit   # repeat size unit for Size used in estimate col
+    )
+
+  # Reorder to the exact workbook column sequence before rename, so that
+  # format_wbs_table can hide unit columns by fixed numeric position.
+  df <- df |>
+    dplyr::select(
+      wbs, item,
+      design_quantity, qty_unit,
+      design_size, size_unit,
+      size_used_in_estimate, size_unit_sue,
+      unit_cost, total_cost, useful_life,
+      table, full_line_item_name, row_index
+    ) |>
     dplyr::rename(
-    WBS                = wbs,
-    Item               = item,
-    `Design Quantity`  = design_quantity,
-    `Design Size`      = design_size,
-    `Size Used_in_estimate` = size_used_in_estimate,
-    `Unit Cost`        = unit_cost,
-    `Total Cost`       = total_cost,
-    `Useful Life`      = useful_life,
-    table              = table
-  )
+      WBS                          = wbs,
+      Item                         = item,
+      `Design Quantity`            = design_quantity,
+      `Quantity Units`             = qty_unit,
+      `Design Size`                = design_size,
+      `Design Size Units`          = size_unit,
+      `Size used in estimate`      = size_used_in_estimate,
+      `Design Size Units.1`        = size_unit_sue,
+      `Unit Cost`                  = unit_cost,
+      `Total Cost`                 = total_cost,
+      `Useful Life`                = useful_life
+    )
   
   # ── Stage 4: Format and render ────────────────────────────────────────────
   # Preserve ordered unique section names (the table column = RowGroup labels)

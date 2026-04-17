@@ -68,24 +68,56 @@
 # }
 
 format_wbs_table <- function(wbs_data) {
-  
+
   wbs_data <- wbs_data |>
     dplyr::mutate(
       section   = table,
       is_header = !duplicated(table)
     ) |>
     dplyr::select(-full_line_item_name)
-  
-  # Columns to display (must all exist in wbs_data)
-  display_cols <- c("WBS", "Item", "Design Quantity", "Design Size",
-                    "Size Used_in_estimate", "Unit Cost", "Total Cost", "Useful Life")
-  
-  # Verify they exist before proceeding
+
+  # Column layout (mirrors workbook OUTPUT sheet):
+  # WBS # | Item | Design Quantity | [Quantity Units - hidden] |
+  # Design Size | [Design Size Units - hidden] |
+  # Size used in estimate | [Design Size Units - hidden] |
+  # Unit Cost | Total Cost | Useful Life
+  display_cols <- c("WBS", "Item",
+                    "Design Quantity", "Quantity Units",
+                    "Design Size", "Design Size Units",
+                    "Size used in estimate", "Design Size Units.1",
+                    "Unit Cost", "Total Cost", "Useful Life")
+
+  # Verify display columns exist before proceeding
   missing_cols <- setdiff(display_cols, names(wbs_data))
   if (length(missing_cols) > 0) {
     warning("format_wbs_table: missing columns: ", paste(missing_cols, collapse = ", "))
   }
-  
+
+  # Only hide the internal helper columns — unit columns remain visible
+  # so their values show in cells, but their headers are blanked via colnames.
+  hide_cols <- which(names(wbs_data) %in% c(
+    "table", "row_index", "section", "is_header"
+  )) - 1
+
+  # colnames must have one entry per column in wbs_data (rownames = FALSE).
+  # Column order after mutations above:
+  #  0 WBS | 1 Item | 2 Design Quantity | 3 Quantity Units |
+  #  4 Design Size | 5 Design Size Units |
+  #  6 Size used in estimate | 7 Design Size Units.1 |
+  #  8 Unit Cost | 9 Total Cost | 10 Useful Life |
+  #  11 table | 12 row_index | 13 section | 14 is_header
+  #
+  # Unit column headers (3, 5, 7) are set to "" so the header row shows no
+  # label, but the cell values still render.
+  all_colnames <- c(
+    "WBS #", "Item",
+    "Design Quantity", "",               # Quantity Units — header hidden
+    "Design Size", "",                   # Design Size Units — header hidden
+    "Size used in estimate", "",         # Design Size Units.1 — header hidden
+    "Unit Cost", "Total Cost", "Useful Life",
+    "table", "row_index", "section", "is_header"
+  )
+
   DT::datatable(
     wbs_data,
     options = list(
@@ -98,8 +130,7 @@ format_wbs_table <- function(wbs_data) {
         dataSrc = which(names(wbs_data) == "table") - 1
       ),
       columnDefs = list(
-        list(targets = which(names(wbs_data) == "table") - 1,                              visible = FALSE),
-        list(targets = which(names(wbs_data) %in% c("section", "is_header", "row_index")) - 1, visible = FALSE)
+        list(targets = as.list(hide_cols), visible = FALSE)
       ),
       # Stamp each RowGroup header <tr> with an id after every draw.
       # The RowGroup header is a <th> inside the <tr class="dtrg-group">.
@@ -128,12 +159,11 @@ format_wbs_table <- function(wbs_data) {
     ),
     rownames   = FALSE,
     extensions = "RowGroup",
-    colnames   = c("WBS #", "Item", "Design Quantity", "Design Size",
-                   "Size Used", "Unit Cost", "Total Cost", "Useful Life"),
-    class = 'cell-border stripe'
+    colnames   = all_colnames,
+    class      = 'cell-border stripe'
   ) |>
     formatCurrency(c("Unit Cost", "Total Cost"), "$") |>
-    formatRound(c("Design Quantity", "Design Size"), digits = 2)
+    formatRound(c("Design Quantity", "Design Size", "Size used in estimate"), digits = 2)
 }
 
 
@@ -172,70 +202,74 @@ get_standard_inputs <- function(contam_selection, design_type_idx, design_number
   matching_row <- matching_row |>
     dplyr::mutate(dplyr::across(dplyr::everything(), as.character))
   
-  # Return as named list with all key parameters (extracting single values)
+  # Return as named list with all key parameters (extracting single values).
+  # KEY NAMES must match what mod_inputs.R accesses via standard_inputs_data()$...
+  # If a key name here doesn't match what mod_inputs.R reads, that field will be
+  # silently NULL in get_params(), causing the calculation to fall back to hardcoded
+  # defaults instead of using contaminant-specific values from the Google Sheet.
   list(
     # System size
     design_flow = matching_row$design_flow_i[1],
     design_flow_units = matching_row$df_units[1],
     average_flow = matching_row$average_flow_i[1],
     average_flow_units = matching_row$af_units[1],
-    
-    # Carbon inputs
-    regen_method = matching_row$regen_type_i[1],
-    carbon_life_input_type = matching_row$freund_type_i[1],
-    carbon_life_or_kf = matching_row$freund_1[1],
+
+    # Carbon inputs — key names must match mod_inputs.R lines 504-507
+    regen_type_I = matching_row$regen_type_i[1],          # was: regen_method
+    freund_type = matching_row$freund_type_i[1],           # was: carbon_life_input_type
+    freund_1 = matching_row$freund_1[1],                   # was: carbon_life_or_kf
     freund_2 = matching_row$freund_2[1],
     C_0 = matching_row$c_0[1],
     C_b = matching_row$c_b[1],
-    
+
     # Contaminant removal
     ebct_input_type = matching_row$ebct_type_i[1],
     ebct = matching_row$ebct_i[1],
     ebct_output = matching_row$ebct_o[1],
     kss = matching_row$kss[1],
-    
-    # Pressure vessel design
-    num_tanks = matching_row$num_tanks_i[1],
+
+    # Pressure vessel design — key names must match mod_inputs.R lines 510-519
+    Num_tanks_I = matching_row$num_tanks_i[1],             # was: num_tanks
     use_autosize = matching_row$use_autosize[1],
     bed_depth = matching_row$bed_depth[1],
-    tank_geometry = matching_row$tank_geom_i[1],
-    vessel_height_length = matching_row$comm_height_length[1],
-    vessel_diameter = matching_row$comm_diam[1],
-    
+    tank_geom_I = matching_row$tank_geom_i[1],             # was: tank_geometry
+    comm_height_length = matching_row$comm_height_length[1], # was: vessel_height_length
+    comm_diam = matching_row$comm_diam[1],                  # was: vessel_diameter
+
     # Gravity contactor design
-    use_autosize_gravity = matching_row$use_autosize_a[1],
+    use_autosize_a = matching_row$use_autosize_a[1],        # was: use_autosize_gravity
     basin_width = matching_row$basin_width[1],
     basin_length = matching_row$basin_length[1],
-    basin_depth = matching_row$basin_op_depth[1],
-    
-    # Residuals
-    backwash_frequency = matching_row$back_interval_i[1],
-    discharge_option = matching_row$res_s2_opt_i[1],
-    holding_tank = matching_row$res_s1_opt_i[1],
-    transfer_method = matching_row$transfer_method_i[1],
-    solids_characteristics = matching_row$solids_haz_i[1],
-    
-    # Optional
-    redundant_contactors = matching_row$nrd_i[1],
-    num_booster_pumps = matching_row$lines_pump_i[1],
-    backwash_pumping = matching_row$no_backwash_i[1],
-    backwash_storage = matching_row$no_back_tank_i[1],
-    system_automation = matching_row$manual_i[1],
-    component_level = matching_row$component_level_i[1],
-    include_buildings = matching_row$include_buildings_i[1],
-    include_hvac = matching_row$include_hvac_i[1],
-    include_land = matching_row$include_land_i[1],
+    basin_op_depth = matching_row$basin_op_depth[1],        # was: basin_depth
+
+    # Residuals — key names must match mod_inputs.R lines 522-531
+    back_interval_I = matching_row$back_interval_i[1],      # was: backwash_frequency
+    res_s2_opt_I = matching_row$res_s2_opt_i[1],            # was: discharge_option
+    res_s1_opt_I = matching_row$res_s1_opt_i[1],            # was: holding_tank
+    transfer_method_I = matching_row$transfer_method_i[1],  # was: transfer_method
+    solids_haz_I = matching_row$solids_haz_i[1],            # was: solids_characteristics
+
+    # Optional — key names must match mod_inputs.R lines 513, 522-540
+    NRD_I = matching_row$nrd_i[1],                         # was: redundant_contactors
+    lines_pump_I = matching_row$lines_pump_i[1],            # was: num_booster_pumps
+    no_backwash_I = matching_row$no_backwash_i[1],          # was: backwash_pumping
+    no_back_tank_I = matching_row$no_back_tank_i[1],        # was: backwash_storage
+    manual_I = matching_row$manual_i[1],                    # was: system_automation
+    component_level_I = matching_row$component_level_i[1],  # was: component_level
+    include_buildings_I = matching_row$include_buildings_i[1], # was: include_buildings
+    include_HVAC_I = matching_row$include_hvac_i[1],        # was: include_hvac
+    include_land_I = matching_row$include_land_i[1],        # was: include_land
     addon = matching_row$addon_i[1],
-    
-    # Retrofit
-    retrofit = matching_row$retrofit_i[1],
+
+    # Retrofit — key names must match mod_inputs.R line 546
+    retrofit_I = matching_row$retrofit_i[1],                # was: retrofit
     retrofit_carbon_life_type = matching_row$r_freund_type_i[1],
     retrofit_carbon_life = matching_row$r_freund_1[1],
     retrofit_freund_2 = matching_row$r_freund_2[1],
     retrofit_C_0 = matching_row$r_c_0[1],
     retrofit_C_b = matching_row$r_c_b[1],
-    
-    # Full row for any additional needs
+
+    # Full row for any additional needs (raw column names preserved)
     full_data = matching_row
   )
 }

@@ -124,8 +124,7 @@ get_neighbors <- function(sabs, cutoff) {
 ```{r warning=FALSE}
 sf::sf_use_s2(FALSE)
 ### Run loop over each state, save to S3
-states <- c("MI","MN","MS","MO","MT","NE","NV","NH","NJ",
-  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+states <- c("TN","TX","UT","VT",
   "VA","WA","WV","WI","WY"
 )
 

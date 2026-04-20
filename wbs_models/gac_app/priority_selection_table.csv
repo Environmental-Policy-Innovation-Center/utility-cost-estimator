@@ -1,0 +1,93 @@
+WBS,Item,Small_Low,Small_Mid,Small_High,Medium_Low,Medium_Mid,Medium_High,Large_Low,Large_Mid,Large_High
+1.1.1,Stainless Steel,4,4,1,4,4,1,4,4,1
+1.1.1,Carbon Steel - Stainless Internals,3,3,2,3,3,2,3,3,2
+1.1.1,Carbon Steel - Plastic Internals,2,1,3,2,1,3,2,1,3
+1.1.1,Fiberglass,1,2,4,1,2,4,1,2,4
+1.2.1,Concrete,1,1,1,1,1,1,1,1,1
+1.2.2,Internals (Underdrain/Backwash System),1,1,1,1,1,1,1,1,1
+1.2.3,Aluminum Railing,1,1,1,1,1,1,1,1,1
+1.2.4,Aluminum Stairs,1,1,1,1,1,1,1,1,1
+1.2.5,Excavation,1,1,1,1,1,1,1,1,1
+1.2.6,Backfill and Compaction,1,1,1,1,1,1,1,1,1
+2.1.1,"Concrete Basins (includes Excavation, Backfill, and Compaction)",3,3,2,3,3,2,3,3,2
+2.1.1,Steel Tanks,4,4,1,4,4,1,4,4,1
+2.1.1,Fiberglass Tanks,2,1,3,2,1,3,2,1,3
+2.1.1,Plastic/HDPE Tanks,1,2,4,1,2,4,1,2,4
+2.2.1,"Concrete Basins (includes Excavation, Backfill, and Compaction)",4,4,2,4,4,2,4,4,2
+2.2.1,Steel Tanks,3,3,1,3,3,1,3,3,1
+2.2.1,Fiberglass Tanks,2,1,3,2,1,3,2,1,3
+2.2.1,Plastic/HDPE Tanks,1,2,4,1,2,4,1,2,4
+2.3.1,Plastic/XLPE,1,2,2,1,2,2,1,2,2
+2.3.1,Fiberglass,2,1,1,2,1,1,2,1,1
+2.3.2,Secondary Containment - Concrete Curbing,1,1,1,1,1,1,1,1,1
+2.3.3,Secondary Containment - Chemical Resistant Coating,1,1,1,1,1,1,1,1,1
+2.4.1,Plastic/XLPE,1,2,3,1,2,3,1,2,3
+2.4.1,Fiberglass,2,1,2,2,1,2,2,1,2
+2.4.1,Stainless Steel,3,3,1,3,3,1,3,3,1
+3.1.1,Ductile Iron,3,3,3,3,3,3,3,3,3
+3.1.1,CPVC,2,1,4,2,1,4,2,1,4
+3.1.1,PVC,1,2,5,1,2,5,1,2,5
+3.1.1,Stainless Steel,5,5,1,5,5,1,5,5,1
+3.1.1,Steel,4,4,2,4,4,2,4,4,2
+3.2.1,CPVC,2,1,3,2,1,3,2,1,3
+3.2.1,PVC,1,2,4,1,2,4,1,2,4
+3.2.1,Stainless Steel,4,4,1,4,4,1,4,4,1
+3.2.1,Steel,3,3,2,3,3,2,3,3,2
+3.3.1,Ductile Iron,3,3,3,3,3,3,3,3,3
+3.3.1,CPVC,2,1,4,2,1,4,2,1,4
+3.3.1,PVC,1,2,5,1,2,5,1,2,5
+3.3.1,Stainless Steel,5,5,1,5,5,1,5,5,1
+3.3.1,Steel,4,4,2,4,4,2,4,4,2
+3.4.1,CPVC,2,1,3,2,1,3,2,1,3
+3.4.1,PVC,1,2,4,1,2,4,1,2,4
+3.4.1,Stainless Steel,4,4,1,4,4,1,4,4,1
+3.4.1,Steel,3,3,2,3,3,2,3,3,2
+3.4.2,Excavation,1,1,1,1,1,1,1,1,1
+3.4.3,Bedding,1,1,1,1,1,1,1,1,1
+3.4.5,Backfill and Compaction ,1,1,1,1,1,1,1,1,1
+3.4.6,Thrust Blocks,1,1,1,1,1,1,1,1,1
+3.5.1,CPVC,2,1,1,2,1,1,2,1,1
+3.5.1,PVC,1,2,2,1,2,2,1,2,2
+3.6.1,CPVC,2,1,3,2,1,3,2,1,3
+3.6.1,PVC,1,2,4,1,2,4,1,2,4
+3.6.1,Stainless Steel,4,4,1,4,4,1,4,4,1
+3.6.1,Steel,3,3,2,3,3,2,3,3,2
+3.7.1,CPVC,2,1,3,2,1,3,2,1,3
+3.7.1,PVC,1,2,4,1,2,4,1,2,4
+3.7.1,Stainless Steel,4,4,1,4,4,1,4,4,1
+3.7.1,Steel,3,3,2,3,3,2,3,3,2
+4.1.1,Process - Polypropylene/PVC,1,2,3,1,2,3,1,2,3
+4.1.1,Process - Stainless Steel,3,3,1,3,3,1,3,3,1
+4.1.1,Process - Cast Iron,2,1,2,2,1,2,2,1,2
+4.1.2,Backwash - Polypropylene/PVC,1,2,3,1,2,3,1,2,3
+4.1.2,Backwash - Stainless Steel,3,3,1,3,3,1,3,3,1
+4.1.2,Backwash - Cast Iron,2,1,2,2,1,2,2,1,2
+4.1.3,Residuals - Polypropylene/PVC,1,2,3,1,2,3,1,2,3
+4.1.3,Residuals - Stainless Steel,3,3,1,3,3,1,3,3,1
+4.1.3,Residuals - Cast Iron,2,1,2,2,1,2,2,1,2
+4.1.4,Ferric Chloride - Polypropylene/PVC,1,1,1,1,1,1,1,1,1
+4.1.5,Polymer - Polypropylene/PVC,1,2,3,1,2,3,1,2,3
+4.1.5,Polymer - Stainless Steel,3,3,1,3,3,1,3,3,1
+4.1.5,Polymer - Cast Iron,2,1,2,2,1,2,2,1,2
+4.1.6,Bypass - Polypropylene/PVC,1,2,3,1,2,3,1,2,3
+4.1.6,Bypass - Stainless Steel,3,3,1,3,3,1,3,3,1
+4.1.6,Bypass - Cast Iron,2,1,2,2,1,2,2,1,2
+4.2.1,Influent and treated water - Polypropylene/PVC,1,2,3,1,2,3,1,2,3
+4.2.1,Influent and treated water - Stainless Steel,3,3,1,3,3,1,3,3,1
+4.2.1,Influent and treated water - Cast Iron,2,1,2,2,1,2,2,1,2
+4.2.2,Process - Polypropylene/PVC,1,2,3,1,2,3,1,2,3
+4.2.2,Process - Stainless Steel,3,3,1,3,3,1,3,3,1
+4.2.2,Process - Cast Iron,2,1,2,2,1,2,2,1,2
+4.2.3,Backwash - Polypropylene/PVC,1,2,3,1,2,3,1,2,3
+4.2.3,Backwash - Stainless Steel,3,3,1,3,3,1,3,3,1
+4.2.3,Backwash - Cast Iron,2,1,2,2,1,2,2,1,2
+4.2.4,Residuals - Polypropylene/PVC,1,2,3,1,2,3,1,2,3
+4.2.4,Residuals - Stainless Steel,3,3,1,3,3,1,3,3,1
+4.2.4,Residuals - Cast Iron,2,1,2,2,1,2,2,1,2
+4.2.5,Ferric Chloride - Polypropylene/PVC,1,1,1,1,1,1,1,1,1
+4.2.6,Polymer - Polypropylene/PVC,1,2,3,1,2,3,1,2,3
+4.2.6,Polymer - Stainless Steel,3,3,1,3,3,1,3,3,1
+4.2.6,Polymer - Cast Iron,2,1,2,2,1,2,2,1,2
+4.2.7,Bypass - Polypropylene/PVC,1,2,3,1,2,3,1,2,3
+4.2.7,Bypass - Stainless Steel,3,3,1,3,3,1,3,3,1
+4.2.7,Bypass - Cast Iron,2,1,2,2,1,2,2,1,2

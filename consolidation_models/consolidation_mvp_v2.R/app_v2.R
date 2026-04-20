@@ -1,10 +1,12 @@
 # ============================================================
 #  Water System Consolidation Tool  —  v3 (simplified)
-#  Dependencies: shiny, leaflet, aws.s3, tidyverse, sf,
-#                stringr, DT, plotly, scales
+#  Dependencies: shiny, shinydashboard, shinyjs, leaflet,
+#                aws.s3, tidyverse, sf, stringr, DT, plotly, scales
 # ============================================================
 
 library(shiny)
+library(shinydashboard)
+library(shinyjs)
 library(leaflet)
 library(aws.s3)
 library(tidyverse)
@@ -13,6 +15,8 @@ library(stringr)
 library(DT)
 library(plotly)
 library(scales)
+
+source("mod_landing.R")
 
 # ── 0. Static lookups --------------------------------------------------------
 
@@ -30,18 +34,18 @@ state_choices <- c(
 
 load_state_data <- function(state) {
   state_lc <- tolower(state)
-  
+
   neighbors <- s3read_using(
     read.csv,
     object = sprintf("s3://tech-team-data/consolidation/mvp/state_data/%s_neighbors.csv", state_lc)
   )
-  
+
   sys_geo <- s3read_using(
     st_read,
     object = sprintf("s3://tech-team-data/consolidation/mvp/state_data/%s_sys_geo.geojson", state_lc),
     quiet  = TRUE
   ) %>% st_transform(4326)
-  
+
   list(neighbors = neighbors, sys_geo = sys_geo)
 }
 
@@ -96,151 +100,190 @@ get_costs <- function(pairs,
 
 # ── 2. UI --------------------------------------------------------------------
 
-ui <- fluidPage(
-  tags$head(tags$style(HTML("
-    body { font-size: 13px; }
-    .sidebar-section { background: #f8f9fa; border-radius: 6px;
-                        padding: 10px 12px; margin-bottom: 10px; }
-    .sidebar-section h5 { margin-top: 0; font-weight: 600; color: #333; }
-    .step-badge { display: inline-block; background: #0d6efd; color: #fff;
-                  border-radius: 50%; width: 20px; height: 20px;
-                  text-align: center; line-height: 20px; font-size: 11px;
-                  margin-right: 6px; }
-    .btn-step { width: 100%; margin-top: 6px; }
-    #map { border-radius: 6px; }
-    .filter-row { display: flex; align-items: center; margin-bottom: 4px; }
-    .filter-row label { flex: 0 0 48%; font-size: 12px; color: #444;
-                         margin: 0; padding-right: 8px; line-height: 1.2; }
-    .filter-row .filter-input { flex: 1; }
-    .filter-row .filter-input .form-group { margin-bottom: 0; }
-    .filter-row .filter-input input,
-    .filter-row .filter-input select { height: 28px; padding: 2px 6px; font-size: 12px; }
-    .filter-section-label { font-size: 11px; font-weight: 700; color: #666;
-                             text-transform: uppercase; letter-spacing: .5px;
-                             margin: 6px 0 4px; }
-  "))),
-  
-  titlePanel("Water System Consolidation Tool — v3"),
-  
-  sidebarLayout(
-    sidebarPanel(
-      width = 4,
-      
-      # Step 1
-      div(class = "sidebar-section",
-          h5(HTML('<span class="step-badge">1</span>Select State')),
-          div(class = "filter-row",
-              tags$label("State"),
-              div(class = "filter-input",
-                  selectInput("state", NULL, choices = state_choices, selected = "HI"))
-          ),
-          actionButton("btn_state", "Load State", class = "btn-primary btn-step btn-sm")
-      ),
-      
-      # Step 2
-      div(class = "sidebar-section",
-          h5(HTML('<span class="step-badge">2</span>Define Systems')),
-          
-          div(class = "filter-section-label", "Consolidating System Characteristics"),
-          div(class = "filter-row",
-              tags$label("Owner Type"),
-              div(class = "filter-input",
-                  selectInput("cons_owner", NULL, choices = owner_types, selected = "All"))),
-          div(class = "filter-row",
-              tags$label("Min Health Violations (10yr)"),
-              div(class = "filter-input",
-                  numericInput("cons_viols", NULL, value = 1, min = 0, step = 1))),
-          div(class = "filter-row",
-              tags$label("Max Population Served"),
-              div(class = "filter-input",
-                  numericInput("cons_max_pop", NULL, value = 1000, min = 0, step = 100))),
-          div(class = "filter-row",
-              tags$label("Open Health Violation"),
-              div(class = "filter-input",
-                  selectInput("cons_open_viol", NULL, choices = c("Yes","No"), selected = "No"))),
-          
-          tags$hr(style = "margin: 8px 0;"),
-          div(class = "filter-section-label", "Receiving System Characteristics"),
-          div(class = "filter-row",
-              tags$label("Owner Type"),
-              div(class = "filter-input",
-                  selectInput("rec_owner", NULL, choices = owner_types, selected = "All"))),
-          div(class = "filter-row",
-              tags$label("Max Health Violations (10yr)"),
-              div(class = "filter-input",
-                  numericInput("rec_viols", NULL, value = 1, min = 0, step = 1))),
-          div(class = "filter-row",
-              tags$label("Min Population Served"),
-              div(class = "filter-input",
-                  numericInput("rec_min_pop", NULL, value = 10000, min = 0, step = 500))),
-          div(class = "filter-row",
-              tags$label("Open Health Violation"),
-              div(class = "filter-input",
-                  selectInput("rec_open_viol", NULL, choices = c("Yes","No"), selected = "No"))),
-          
-          tags$hr(style = "margin: 8px 0;"),
-          div(class = "filter-row",
-              tags$label("Distance Cutoff (miles)"),
-              div(class = "filter-input",
-                  numericInput("cutoff", NULL, value = 25, min = 1))),
-          
-          actionButton("btn_define", "Define Systems", class = "btn-success btn-step btn-sm")
-      ),
-      
-      # Step 3
-      div(class = "sidebar-section",
-          h5(HTML('<span class="step-badge">3</span>Cost Parameters')),
-          div(class = "filter-row",
-              tags$label("Cost per Mile ($)"),
-              div(class = "filter-input",
-                  numericInput("cost_per_mile", NULL, value = 1000000, min = 0))),
-          div(class = "filter-row",
-              tags$label("Connection Fee ($)"),
-              div(class = "filter-input",
-                  numericInput("connection_fee", NULL, value = 4000, min = 0))),
-          div(class = "filter-row",
-              tags$label("Service Line Fee ($)"),
-              div(class = "filter-input",
-                  numericInput("service_line", NULL, value = 6200, min = 0))),
-          div(class = "filter-row",
-              tags$label("Admin Cost (%)"),
-              div(class = "filter-input",
-                  numericInput("admin_cost", NULL, value = 0.15, step = 0.01))),
-          div(class = "filter-row",
-              tags$label("Contingency (%)"),
-              div(class = "filter-input",
-                  numericInput("contingency", NULL, value = 0.20, step = 0.01))),
-          div(class = "filter-row",
-              tags$label("Planning & Const. (%)"),
-              div(class = "filter-input",
-                  numericInput("planning", NULL, value = 0.10, step = 0.01))),
-          div(class = "filter-row",
-              tags$label("Engineering (%)"),
-              div(class = "filter-input",
-                  numericInput("engineering", NULL, value = 0.15, step = 0.01))),
-          div(class = "filter-row",
-              tags$label("Inflation (%)"),
-              div(class = "filter-input",
-                  numericInput("inflation", NULL, value = 0.031, step = 0.001))),
-          div(class = "filter-row",
-              tags$label("Regional Multiplier (%)"),
-              div(class = "filter-input",
-                  numericInput("regional", NULL, value = 0.10, step = 0.01))),
-          actionButton("btn_run", "Run Analysis", class = "btn-danger btn-step btn-sm")
-      ),
-      
-      uiOutput("status_ui")
+ui <- dashboardPage(
+
+  # ── Header (disabled — replaced by custom top nav) ──
+  dashboardHeader(disable = TRUE),
+
+  # ── Sidebar (hidden — kept for tab routing only) ──
+  dashboardSidebar(
+    collapsed = TRUE,
+    sidebarMenu(
+      id = "sidebar",
+      menuItem("Home",       tabName = "home"),
+      menuItem("Estimator",  tabName = "tool")
+    )
+  ),
+
+  # ── Body ──
+  dashboardBody(
+    useShinyjs(),
+
+    tags$head(
+      includeCSS("www/styles.css")
     ),
-    
-    mainPanel(
-      width = 8,
-      leafletOutput("map", height = "420px"),
-      br(),
-      tabsetPanel(
-        id = "tabs",
-        tabPanel("Consolidation Pairs",        br(), DTOutput("results_table")),
-        tabPanel("Consolidating Cost Chart",   br(), plotlyOutput("cost_chart", height = "320px")),
-        tabPanel("Consolidation Cost Summary", br(), uiOutput("cost_summary_ui"))
+
+    # ── Custom top navbar ──
+    tags$nav(
+      class = "topnav",
+      tags$a(
+        id = "nav-home", href = "#", class = "topnav-brand",
+        HTML('<svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+               <circle cx="12" cy="12" r="11" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+               <path d="M5 17c2-6 4-10 7-10s5 4 7 10" stroke="#0e8a7d" stroke-width="2" stroke-linecap="round"/>
+               <circle cx="12" cy="6" r="2" fill="#0e8a7d"/>
+               <path d="M8 20h8" stroke="rgba(255,255,255,0.4)" stroke-width="1.5" stroke-linecap="round"/>
+             </svg>'),
+        "EPIC-Tech \u2014 Water System Consolidation"
+      ),
+      tags$div(
+        class = "topnav-links",
+        tags$a(id = "nav-how",      href = "#", "How It Works"),
+        tags$a(id = "nav-models",   href = "#", "Models"),
+        tags$a(id = "nav-method",   href = "#", "Methodology"),
+        tags$a(id = "nav-launch",   href = "#", class = "topnav-btn", "Launch Tool")
+      )
+    ),
+
+    # Tab content
+    tabItems(
+      tabItem(tabName = "home", landingUI("landing")),
+
+      tabItem(tabName = "tool",
+        div(class = "tool-content",
+          sidebarLayout(
+            sidebarPanel(
+              width = 4,
+
+              # Step 1
+              div(class = "sidebar-section",
+                  h5(HTML('<span class="step-badge">1</span>Select State')),
+                  div(class = "filter-row",
+                      tags$label("State"),
+                      div(class = "filter-input",
+                          selectInput("state", NULL, choices = state_choices, selected = "HI"))
+                  ),
+                  actionButton("btn_state", "Load State", class = "btn-primary btn-step btn-sm")
+              ),
+
+              # Step 2
+              div(class = "sidebar-section",
+                  h5(HTML('<span class="step-badge">2</span>Define Systems')),
+
+                  div(class = "filter-section-label", "Consolidating System Characteristics"),
+                  div(class = "filter-row",
+                      tags$label("Owner Type"),
+                      div(class = "filter-input",
+                          selectInput("cons_owner", NULL, choices = owner_types, selected = "All"))),
+                  div(class = "filter-row",
+                      tags$label("Min Health Violations (10yr)"),
+                      div(class = "filter-input",
+                          numericInput("cons_viols", NULL, value = 1, min = 0, step = 1))),
+                  div(class = "filter-row",
+                      tags$label("Max Population Served"),
+                      div(class = "filter-input",
+                          numericInput("cons_max_pop", NULL, value = 1000, min = 0, step = 100))),
+                  div(class = "filter-row",
+                      tags$label("Open Health Violation"),
+                      div(class = "filter-input",
+                          selectInput("cons_open_viol", NULL, choices = c("Yes","No"), selected = "No"))),
+
+                  tags$hr(style = "margin: 8px 0;"),
+                  div(class = "filter-section-label", "Receiving System Characteristics"),
+                  div(class = "filter-row",
+                      tags$label("Owner Type"),
+                      div(class = "filter-input",
+                          selectInput("rec_owner", NULL, choices = owner_types, selected = "All"))),
+                  div(class = "filter-row",
+                      tags$label("Max Health Violations (10yr)"),
+                      div(class = "filter-input",
+                          numericInput("rec_viols", NULL, value = 1, min = 0, step = 1))),
+                  div(class = "filter-row",
+                      tags$label("Min Population Served"),
+                      div(class = "filter-input",
+                          numericInput("rec_min_pop", NULL, value = 10000, min = 0, step = 500))),
+                  div(class = "filter-row",
+                      tags$label("Open Health Violation"),
+                      div(class = "filter-input",
+                          selectInput("rec_open_viol", NULL, choices = c("Yes","No"), selected = "No"))),
+
+                  tags$hr(style = "margin: 8px 0;"),
+                  div(class = "filter-row",
+                      tags$label("Distance Cutoff (miles)"),
+                      div(class = "filter-input",
+                          numericInput("cutoff", NULL, value = 25, min = 1))),
+
+                  actionButton("btn_define", "Define Systems", class = "btn-success btn-step btn-sm")
+              ),
+
+              # Step 3
+              div(class = "sidebar-section",
+                  h5(HTML('<span class="step-badge">3</span>Cost Parameters')),
+                  div(class = "filter-row",
+                      tags$label("Cost per Mile ($)"),
+                      div(class = "filter-input",
+                          numericInput("cost_per_mile", NULL, value = 1000000, min = 0))),
+                  div(class = "filter-row",
+                      tags$label("Connection Fee ($)"),
+                      div(class = "filter-input",
+                          numericInput("connection_fee", NULL, value = 4000, min = 0))),
+                  div(class = "filter-row",
+                      tags$label("Service Line Fee ($)"),
+                      div(class = "filter-input",
+                          numericInput("service_line", NULL, value = 6200, min = 0))),
+                  div(class = "filter-row",
+                      tags$label("Admin Cost (%)"),
+                      div(class = "filter-input",
+                          numericInput("admin_cost", NULL, value = 0.15, step = 0.01))),
+                  div(class = "filter-row",
+                      tags$label("Contingency (%)"),
+                      div(class = "filter-input",
+                          numericInput("contingency", NULL, value = 0.20, step = 0.01))),
+                  div(class = "filter-row",
+                      tags$label("Planning & Const. (%)"),
+                      div(class = "filter-input",
+                          numericInput("planning", NULL, value = 0.10, step = 0.01))),
+                  div(class = "filter-row",
+                      tags$label("Engineering (%)"),
+                      div(class = "filter-input",
+                          numericInput("engineering", NULL, value = 0.15, step = 0.01))),
+                  div(class = "filter-row",
+                      tags$label("Inflation (%)"),
+                      div(class = "filter-input",
+                          numericInput("inflation", NULL, value = 0.031, step = 0.001))),
+                  div(class = "filter-row",
+                      tags$label("Regional Multiplier (%)"),
+                      div(class = "filter-input",
+                          numericInput("regional", NULL, value = 0.10, step = 0.01))),
+                  actionButton("btn_run", "Run Analysis", class = "btn-danger btn-step btn-sm")
+              ),
+
+              uiOutput("status_ui")
+            ),
+
+            mainPanel(
+              width = 8,
+              leafletOutput("map", height = "420px"),
+              br(),
+              tabsetPanel(
+                id = "tabs",
+                tabPanel("Consolidation Pairs",        br(), DTOutput("results_table")),
+                tabPanel("Consolidating Cost Chart",   br(), plotlyOutput("cost_chart", height = "320px")),
+                tabPanel("Consolidation Cost Summary", br(), uiOutput("cost_summary_ui"))
+              )
+            )
+          )
+        )
+      )
+    ),
+
+    # Fixed footer banner
+    tags$div(class = "app-footer",
+      tags$span(class = "footer-icon", icon("droplet")),
+      tags$span(
+        tags$span(class = "footer-label", "Source | "),
+        tags$span(class = "footer-source", "EPA SDWIS & EPIC Engineering Cost Model"),
+        tags$span(class = "footer-label", " | Water System Consolidation Estimator")
       )
     )
   )
@@ -249,16 +292,48 @@ ui <- fluidPage(
 # ── 3. Server ----------------------------------------------------------------
 
 server <- function(input, output, session) {
-  
+
   rv <- reactiveValues(
     neighbors     = NULL,
     sys_geo       = NULL,
     filtered      = NULL,
     costs         = NULL,
-    selected_cons = NULL,   # pwsid of clicked consolidating system
-    selected_pair = NULL    # rec_pwsid from table row click
+    selected_cons = NULL,
+    selected_pair = NULL
   )
-  
+
+  # Landing page module
+  landingServer("landing", parent_session = session)
+
+  # ── Top-navbar link handlers ──
+  scroll_to_section <- function(section_id) {
+    shinyjs::runjs(sprintf("
+      (function() {
+        var homeTab = document.querySelector('a[data-value=\"home\"]');
+        if (homeTab && !homeTab.parentElement.classList.contains('active')) {
+          homeTab.click();
+          setTimeout(function() {
+            var el = document.getElementById('%s');
+            if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+          }, 300);
+        } else {
+          var el = document.getElementById('%s');
+          if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+        }
+      })();
+    ", section_id, section_id))
+  }
+
+  shinyjs::onclick("nav-home", {
+    updateTabItems(session, "sidebar", "home")
+    shinyjs::runjs("window.scrollTo({top: 0, behavior: 'smooth'});")
+  })
+
+  shinyjs::onclick("nav-how",    scroll_to_section("landing-how_section"))
+  shinyjs::onclick("nav-models", scroll_to_section("landing-models_section"))
+  shinyjs::onclick("nav-method", scroll_to_section("landing-methodology_anchor"))
+  shinyjs::onclick("nav-launch", updateTabItems(session, "sidebar", "tool"))
+
   # ── Step 1: Load state ─────────────────────────────────────────────────────
   observeEvent(input$btn_state, {
     withProgress(message = sprintf("Loading %s data from S3...", input$state),
@@ -286,7 +361,7 @@ server <- function(input, output, session) {
                    })
                  })
   })
-  
+
   # ── Step 2: Filter pairs ───────────────────────────────────────────────────
   observeEvent(input$btn_define, {
     req(rv$neighbors)
@@ -304,19 +379,19 @@ server <- function(input, output, session) {
         pop_served        = input$rec_min_pop,
         cutoff            = input$cutoff
       )
-      
+
       filtered <- filter_pairs(rv$neighbors, cons_cfg, rec_cfg)
-      
+
       if (nrow(filtered) == 0) {
         showNotification("No pairs match — try relaxing filters.", type = "warning")
         return()
       }
-      
+
       rv$filtered      <- filtered
       rv$costs         <- NULL
       rv$selected_cons <- NULL
       rv$selected_pair <- NULL
-      
+
       showNotification(
         sprintf("%d consolidating | %d receiving systems identified (%d pairs).",
                 n_distinct(filtered$pwsid), n_distinct(filtered$rec_pwsid), nrow(filtered)),
@@ -324,7 +399,7 @@ server <- function(input, output, session) {
       )
     })
   })
-  
+
   # ── Step 3: Apply costs ────────────────────────────────────────────────────
   observeEvent(input$btn_run, {
     req(rv$filtered)
@@ -351,7 +426,7 @@ server <- function(input, output, session) {
       )
     })
   })
-  
+
   # ── Status badge ───────────────────────────────────────────────────────────
   output$status_ui <- renderUI({
     if (!is.null(rv$costs) && "total_project_cost" %in% names(rv$costs)) {
@@ -366,47 +441,43 @@ server <- function(input, output, session) {
           icon("map"), sprintf(" %d raw pairs loaded", nrow(rv$neighbors)))
     }
   })
-  
+
   # ── Map base tile (rendered once) ──────────────────────────────────────────
   output$map <- renderLeaflet({
     leaflet() %>%
       addProviderTiles(providers$CartoDB.Positron) %>%
       setView(lng = -95, lat = 37, zoom = 4)
   })
-  
+
   # ── Draw ALL base polygons once when costs are computed ────────────────────
-  # These stay on the map permanently until a new filter/cost run replaces them.
   observeEvent(rv$costs, {
     req(rv$costs, rv$sys_geo)
     costs <- rv$costs
-    
-    # Build one-row-per-system lookup tables directly from costs
+
     cons_ids <- unique(costs$pwsid)
     rec_ids  <- unique(costs$rec_pwsid)
-    
+
     cons_info <- costs %>%
       distinct(pwsid, pws_name, population_served_count,
                service_connections_count, owner_type, health_viols_10yr)
-    
+
     rec_info <- costs %>%
       distinct(rec_pwsid, rec_pws_name, rec_population_served_count,
                rec_owner_type, rec_health_viols_10yr)
-    
-    # Join geometry
+
     cons_sf <- rv$sys_geo %>%
       filter(pwsid %in% cons_ids) %>%
       left_join(cons_info, by = "pwsid")
-    
+
     rec_sf <- rv$sys_geo %>%
       filter(pwsid %in% rec_ids) %>%
       left_join(rec_info, by = c("pwsid" = "rec_pwsid"))
-    
+
     bbox <- st_bbox(bind_rows(
       cons_sf %>% select(geometry),
       rec_sf  %>% select(geometry)
     ))
-    
-    # Draw base layer — group = "base" so we can clear it on re-run
+
     leafletProxy("map") %>%
       clearShapes() %>%
       clearControls() %>%
@@ -442,42 +513,38 @@ server <- function(input, output, session) {
                 opacity = 0.7) %>%
       fitBounds(bbox[[1]], bbox[[2]], bbox[[3]], bbox[[4]])
   })
-  
+
   # ── Highlight selected system + its partners ───────────────────────────────
-  # This ONLY touches the "highlight" group. Base polygons are never removed.
   observe({
     req(rv$costs, rv$sys_geo, rv$selected_cons)
     costs  <- rv$costs
     sel_id <- rv$selected_cons
-    
-    # The selected consolidating system's info (one row)
+
     sel_info <- costs %>%
       filter(pwsid == sel_id) %>%
       slice(1) %>%
       select(pwsid, pws_name, population_served_count, owner_type, health_viols_10yr)
-    
+
     sel_sf <- rv$sys_geo %>%
       filter(pwsid == sel_id) %>%
       left_join(sel_info, by = "pwsid")
-    
-    # Its receiving partners
+
     partner_ids <- costs %>% filter(pwsid == sel_id) %>% pull(rec_pwsid) %>% unique()
-    
+
     partner_info <- costs %>%
       filter(pwsid == sel_id) %>%
       distinct(rec_pwsid, rec_pws_name, rec_population_served_count,
                rec_owner_type, rec_health_viols_10yr)
-    
+
     partner_sf <- rv$sys_geo %>%
       filter(pwsid %in% partner_ids) %>%
       left_join(partner_info, by = c("pwsid" = "rec_pwsid"))
-    
+
     bbox <- st_bbox(bind_rows(
       sel_sf     %>% select(geometry),
       partner_sf %>% select(geometry)
     ))
-    
-    # Only clear and redraw the highlight group — base stays untouched
+
     leafletProxy("map") %>%
       clearGroup("highlight") %>%
       addPolygons(
@@ -504,7 +571,7 @@ server <- function(input, output, session) {
       ) %>%
       fitBounds(bbox[[1]], bbox[[2]], bbox[[3]], bbox[[4]])
   })
-  
+
   # ── Map click → update selection ───────────────────────────────────────────
   observeEvent(input$map_shape_click, {
     id <- input$map_shape_click$id
@@ -514,7 +581,7 @@ server <- function(input, output, session) {
       rv$selected_pair <- NULL
     }
   })
-  
+
   # ── Results table ──────────────────────────────────────────────────────────
   selected_pairs_df <- reactive({
     req(rv$costs, "total_project_cost" %in% names(rv$costs))
@@ -527,7 +594,7 @@ server <- function(input, output, session) {
         total_capital_costs, total_markup, total_project_cost
       )
   })
-  
+
   output$results_table <- renderDT({
     req(selected_pairs_df())
     selected_pairs_df() %>%
@@ -551,33 +618,32 @@ server <- function(input, output, session) {
       datatable(selection = "single", rownames = FALSE,
                 options = list(pageLength = 8, scrollX = TRUE, dom = "tip"))
   })
-  
-  # Table row click → zoom to that pair
+
   observeEvent(input$results_table_rows_selected, {
     req(rv$costs, rv$sys_geo)
     row_idx  <- input$results_table_rows_selected
     pair_row <- selected_pairs_df()[row_idx, ]
-    
+
     rv$selected_cons <- pair_row$pwsid
     rv$selected_pair <- pair_row$rec_pwsid
   })
-  
+
   # ── Cost chart ─────────────────────────────────────────────────────────────
   output$cost_chart <- renderPlotly({
     req(rv$costs, rv$selected_cons, "total_project_cost" %in% names(rv$costs))
-    
+
     cost_cols <- c("new_source_cost", "pipe_line_cost", "connection_fees",
                    "service_line_cost", "admin_costs", "CEQA_cost",
                    "contingency", "planning_constuction", "engineering_services",
                    "inflation", "regional_multiplier")
-    
+
     plot_df <- rv$costs %>%
       filter(pwsid == rv$selected_cons) %>%
       { if (!is.null(rv$selected_pair)) filter(., rec_pwsid == rv$selected_pair) else . } %>%
       select(rec_pws_name, all_of(cost_cols)) %>%
       pivot_longer(-rec_pws_name, names_to = "component", values_to = "cost") %>%
       mutate(component = str_replace_all(component, "_", " ") %>% str_to_title())
-    
+
     plot_ly(plot_df, x = ~rec_pws_name, y = ~cost, color = ~component,
             type = "bar", text = ~dollar(cost), textposition = "none",
             hovertemplate = "%{x}<br>%{data.name}: %{y:$,.0f}<extra></extra>") %>%
@@ -589,23 +655,23 @@ server <- function(input, output, session) {
         margin  = list(b = 100)
       )
   })
-  
+
   # ── Summary panel ──────────────────────────────────────────────────────────
   output$cost_summary_ui <- renderUI({
     req(rv$costs, rv$selected_cons, "total_project_cost" %in% names(rv$costs))
-    
+
     pairs <- rv$costs %>%
       filter(pwsid == rv$selected_cons) %>%
       arrange(total_project_cost)
-    
+
     header <- div(
-      style = "background:#2c3e50; color:white; padding:10px 14px;
+      style = "background:#1a5276; color:white; padding:10px 14px;
                 border-radius:6px 6px 0 0; margin-bottom:0;",
       tags$b(pairs$pws_name[1]), " — ", tags$small(rv$selected_cons),
       tags$span(style = "float:right;",
                 sprintf("%d potential receiving system(s)", nrow(pairs)))
     )
-    
+
     rows <- lapply(seq_len(nrow(pairs)), function(i) {
       p <- pairs[i, ]
       div(
@@ -652,7 +718,7 @@ server <- function(input, output, session) {
         )
       )
     })
-    
+
     agg <- div(
       style = "background:#eaf2ff; border:1px solid #aed6f1; border-radius:4px;
                 padding:10px; margin-top:4px;",
@@ -664,7 +730,7 @@ server <- function(input, output, session) {
         column(3, "Total:",  tags$b(dollar(sum(pairs$total_project_cost))))
       )
     )
-    
+
     tagList(header, br(), rows, agg)
   })
 }

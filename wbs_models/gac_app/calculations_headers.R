@@ -35,7 +35,7 @@ get_assumption <- function(data, name, default = NA_real_) {
 #   RM        Residuals Management
 #
 # Call order inside calculate_gac_system():
-#   calc_ann_for_n / calc_ann_pv   (AutoSize inner loops — see gac_autosize.R)
+#   calc_ann_for_n / calc_ann_pv   (AutoSize inner loops)
 #   calculate_contactors ✓
 #   calculate_gac_requirements ✓ (double check signatures)
 #   calculate_pumps ✓ (double check signatures)
@@ -3526,8 +3526,7 @@ calculate_om_costs <- function(
 #'
 #' AutoSize logic:
 #'   If params$num_trains is NA/NULL, runs the iterative AutoSize search
-#'   (mirrors workbook VBA AutoSize_Opt / AutoSize_OptA).  The inner-loop
-#'   WBS evaluators are in gac_autosize.R (calc_ann_pv / calc_ann_for_n).
+#'   (mirrors workbook VBA AutoSize_Opt / AutoSize_OptA). 
 #'   Objective: minimise OUTPUT C417 annualized_cost = total_project × CRF + OM_annual.
 #'
 #' Workbook sources:
@@ -3719,7 +3718,39 @@ calculate_gac_system <- function(params) {
       r_disc <- 0.07;  ul_yrs <- 16.1
       crf_g  <- r_disc * (1 + r_disc)^ul_yrs / ((1 + r_disc)^ul_yrs - 1)
 
-      # ── Nested helper: full WBS cost for one candidate (n_try, lw_try, bd_try) ──
+      # ── calc_ann_for_n ────────────────────────────────────────────────────────
+      # Nested closure: evaluate full WBS annualized cost for one gravity basin
+      # AutoSize candidate (n_try trains, square basins of side lw_try ft and
+      # bed depth bd_try ft).
+      #
+      # Mirrors workbook AutoSize_OptA: iterates over basin geometry candidates
+      # and selects the configuration minimising
+      #   annualized_cost = total_project * CRF + total_annual_OM
+      #
+      # Captured from parent scope (do not pass as arguments):
+      #   params            — full params list from calculate_gac_system()
+      #   design_flow_mgd   — design flow (MGD)
+      #   average_flow_mgd  — average flow (MGD)
+      #   ebct_num          — EBCT (minutes)
+      #   r_disc / crf_g    — discount rate and pre-computed CRF (gravity UL = 16.1 yr)
+      #   critical_assumptions — CDA constants (conc_thick, etc.)
+      #
+      # Parameters:
+      #   n_try   Integer. Number of operating treatment trains to evaluate.
+      #   lw_try  Numeric. Basin side length = width (ft); square basins assumed.
+      #   bd_try  Numeric. Basin bed (operating) depth (ft).
+      #
+      # Returns: list(ann = <annualized cost $/yr>, valid = <logical>)
+      #   ann   = Inf when any WBS sub-function errors (candidate skipped).
+      #   valid = FALSE on error; outer loop also marks candidate as invalid.
+      #
+      # Workbook references:
+      #   AutoSize C148  min_n   = CEILING(comp_vol / (max_depth * max_length^2), 1)
+      #   AutoSize C151  extra_search = 5 (comp_nlines_extra_search_a)
+      #   CC       C34   NRD formula (see inline comment below)
+      #   OUTPUT   C413  useful_life formula
+      #   OUTPUT   C417  annualized_cost = total_project * CRF + OM_annual
+      # ─────────────────────────────────────────────────────────────────────────
       calc_ann_for_n <- function(n_try, lw_try, bd_try) {
         tryCatch(suppressMessages({
 
@@ -3731,7 +3762,7 @@ calculate_gac_system <- function(params) {
           p$bed_depth    <- bd_try
           p$use_autosize_a <- "no"
 
-          # defaults
+          # ── Apply parameter defaults (mirrors AutoSize_OptA pre-call setup) ──
           p$service_pumps      <- as.numeric(get_value(p$service_pumps,      0))
           p$backwash_pumps     <- as.numeric(get_value(p$backwash_pumps,     0))
           p$residuals_pumps    <- as.numeric(get_value(p$residuals_pumps,    0))
@@ -3751,7 +3782,12 @@ calculate_gac_system <- function(params) {
           p$regen_type         <- get_value(p$regen_type, "regeneration off-site (non-hazardous)")
           p$backwash_frequency <- as.numeric(get_value(p$backwash_frequency, 52))
 
-          # basin counts
+          # ── Basin counts and NRD (CC C34 gravity formula) ────────────────────
+          # op_num_c: minimum operating basins needed to meet EBCT at this geometry.
+          # NRD_g (gravity): IF(NRD_I<>"", NRD_I,
+          #                    IF(op_num_c=1, NRD_small_1,
+          #                       CHOOSE(ss_cat2, NRD_small, NRD_basins_medium, NRD_basins_large)))
+          # CDA defaults: NRD_small_1=1, NRD_small=0, NRD_basins_medium=1, NRD_basins_large=2
           design_flow_gpm_c <- design_flow_mgd * 1e6 / 1440
           min_basin_vol_c   <- design_flow_gpm_c * ebct_num / 7.48
           op_num_c  <- ceiling(min_basin_vol_c / (lw_try * lw_try * bd_try))
@@ -3759,13 +3795,16 @@ calculate_gac_system <- function(params) {
           nrd_i_c   <- suppressWarnings(as.numeric(p$redundancy))
           nrd_c     <- if (!is.na(nrd_i_c) && !is.null(p$redundancy) &&
                              !is.na(p$redundancy) && p$redundancy != "") {
-            as.integer(nrd_i_c)
-          } else if (op_num_c == 1L) { 1L  # [GA] as.integer(get_assumption(critical_assumptions, "NRD_small_1", 1))
-          } else { c(0L, 1L, 2L)[ss_cat2_c] }  # [GA] c(get_assumption(critical_assumptions,"NRD_small",0), get_assumption(critical_assumptions,"NRD_basins_medium",1), get_assumption(critical_assumptions,"NRD_basins_large",2))[ss_cat2_c]
+            as.integer(nrd_i_c)                        # user-specified NRD_I
+          } else if (op_num_c == 1L) { 1L              # NRD_small_1 = 1 (CDA C9)
+          } else { c(0L, 1L, 2L)[ss_cat2_c] }          # NRD_small/medium/large by flow size
           total_num_c <- op_num_c + nrd_c
 
-          # basin footprint and facility length for this n
-          t_thick <- get_assumption(critical_assumptions, "conc_thick", 1)  # [GA] 
+          # ── Basin footprint and facility length for this candidate ─────────
+          # basin_fp_c: total basin footprint including concrete walls (conc_thick CDA).
+          # facil_len_c: facility length rounded up to nearest 10 ft, used by
+          #              calculate_piping_valves() to scale yard piping and sitework.
+          t_thick <- get_assumption(critical_assumptions, "conc_thick", 1)  # concrete wall thickness (ft)
           basin_fp_c <- (total_num_c * lw_try + (total_num_c + 1L) * t_thick) *
                         (lw_try + 2 * t_thick)
           facil_len_c <- ceiling(sqrt(basin_fp_c) / 10) * 10
@@ -3932,13 +3971,14 @@ calculate_gac_system <- function(params) {
             (depr_direct_g + addon_indirect_g / 20), 1), 40))
           crf_g_used <- r_disc * (1 + r_disc)^ul_g / ((1 + r_disc)^ul_g - 1)
 
-          # Workbook AutoSize_OptA minimises annualized_cost (OUTPUT C417) = total_project * CRF + OM_annual
+          # OUTPUT C417: annualized_cost = total_project × CRF + total_annual_OM
+          # CRF is computed per-candidate using the candidate's own useful_life (ul_g).
           list(ann = cap_r$total_project * crf_g_used + om_r$total_annual, valid = TRUE)
 
         }),
         error = function(e) {
           message(sprintf("  gravity n=%d: WBS error — %s", n_try, conditionMessage(e)))
-          list(ann = Inf, valid = FALSE)
+          list(ann = Inf, valid = FALSE)   # Inf signals infeasible; outer loop skips
         })
       }
 
@@ -4106,7 +4146,50 @@ calculate_gac_system <- function(params) {
       r_disc <- 0.07;  ul_yrs <- 16.1
       crf_p  <- r_disc * (1 + r_disc)^ul_yrs / ((1 + r_disc)^ul_yrs - 1)
 
-      # ── Nested WBS helper for pressure vessels ────────────────────────────
+      # ── calc_ann_pv ───────────────────────────────────────────────────────────
+      # Nested closure: evaluate full WBS annualized cost for one pressure vessel
+      # AutoSize candidate (n_try trains, geometry pre-computed by the outer loop).
+      #
+      # Mirrors workbook VBA AutoSize_Opt: geometry is derived from AutoSize sheet
+      # formulas (raw → clamped → rounded) for each candidate n before this
+      # function is called. The function evaluates the full WBS cost chain
+      # (contactors → GAC requirements → pumps → tanks → piping → controls →
+      # chemical feed → site/buildings → capital → O&M) and returns
+      #   annualized_cost = total_project * CRF + total_annual_OM
+      #
+      # Captured from parent scope (do not pass as arguments):
+      #   params            — full params list from calculate_gac_system()
+      #   design_flow_mgd   — design flow (MGD); used for NRD branch and sub-functions
+      #   average_flow_mgd  — average flow (MGD)
+      #   ebct_num          — EBCT (minutes)
+      #   num_series        — contactors in series per train (CC C18)
+      #   flow_num          — design_flow_mgd as plain numeric (NRD threshold check)
+      #   redund_freq       — NRD denominator, CDA C16 = 4
+      #   r_disc            — discount rate = 0.07
+      #
+      # Parameters:
+      #   n_try     Integer. Number of operating treatment trains to evaluate.
+      #   actual_d  Numeric. Vessel diameter (ft), rounded to nearest 0.5 ft
+      #             per AutoSize E58: ROUNDUP(2 * raw_diam, 0) / 2.
+      #   actual_bd Numeric. Bed depth (ft), rounded to nearest 0.1 ft
+      #             per AutoSize E61: ROUNDUP(raw_bd, 1).
+      #   actual_h  Numeric. Vessel straight-side height (ft), rounded to nearest 0.5 ft
+      #             per AutoSize E62: ROUNDUP(2 * raw_h, 0) / 2.
+      #
+      # Returns: list(ann = <annualized cost $/yr>, valid = <logical>)
+      #   ann   = Inf when any WBS sub-function errors (candidate skipped).
+      #   valid = FALSE on error; outer loop treats candidate as invalid and
+      #           does not count it toward the non-improvement (steps_past) counter.
+      #
+      # Workbook references:
+      #   AutoSize C58/E58  vessel diameter formula and rounding
+      #   AutoSize E61      bed depth rounding
+      #   AutoSize E62      vessel height rounding
+      #   AutoSize C50      extra_search = 5 (comp_nlines_extra_search)
+      #   CC       C34      NRD formula (see inline comment below)
+      #   OUTPUT   C413     useful_life formula
+      #   OUTPUT   C417     annualized_cost = total_project * CRF + OM_annual
+      # ─────────────────────────────────────────────────────────────────────────
       calc_ann_pv <- function(n_try, actual_d, actual_bd, actual_h) {
         tryCatch(suppressMessages({
           p <- params
@@ -4117,14 +4200,20 @@ calculate_gac_system <- function(params) {
           p$use_autosize_a       <- "no"
 
           # NRD per workbook Contactor Constraints C34:
-          #   NRD = INT(num_treat_lines / redund_freq)  where redund_freq = CDA C16 = 4
-          # This is plain floor division regardless of flow size.
-          # Previously a special case was applied for flow < 1 MGD (NRD=1 when n=1),
-          # which does NOT match the workbook formula and caused the optimizer to
-          # incorrectly prefer n=2 over n=1 for small systems.
-          pv_nrd <- as.integer(n_try %/% redund_freq)
+          #   IF(NRD_I<>"", NRD_I,
+          #     IF(design_flow>=1, ROUNDUP(num_treat_lines/redund_freq, 0),
+          #       IF(op_num_tanks=1, NRD_small_1, NRD_small)))
+          # NRD_small_1=1 (CDA C9), NRD_small=0 (CDA C10), redund_freq=4 (CDA C16)
+          # op_num_tanks = num_treat_lines × num_contactors_in_series
+          op_num_tanks_try <- as.integer(n_try) * as.integer(num_series)
+          pv_nrd <- if (design_flow_mgd >= 1) {
+            as.integer(ceiling(n_try / redund_freq))  # large: ROUNDUP(n/4, 0)
+          } else {
+            if (op_num_tanks_try == 1L) 1L else 0L    # small: NRD_small_1=1 or NRD_small=0
+          }
           p$redundancy <- pv_nrd
 
+          # ── Apply parameter defaults (mirrors AutoSize_Opt pre-call setup) ──
           p$service_pumps      <- as.numeric(get_value(p$service_pumps,      0))
           p$backwash_pumps     <- as.numeric(get_value(p$backwash_pumps,     0))
           p$residuals_pumps    <- as.numeric(get_value(p$residuals_pumps,    0))
@@ -4144,8 +4233,10 @@ calculate_gac_system <- function(params) {
           p$regen_type         <- get_value(p$regen_type, "regeneration off-site (non-hazardous)")
           p$backwash_frequency <- as.numeric(get_value(p$backwash_frequency, 52))
 
+          # ss_cat2_p: flow-size category (1=small <1MGD, 2=medium 1–10MGD, 3=large >10MGD)
           ss_cat2_p <- if (design_flow_mgd < 1) 1L else if (design_flow_mgd < 10) 2L else 3L
 
+          # ── Full WBS evaluation ───────────────────────────────────────────────
           con_r <- calculate_contactors(
             design_flow = design_flow_mgd, ebct = ebct_num,
             geometry = p$tank_geometry, num_trains = as.integer(n_try),
@@ -4340,45 +4431,15 @@ calculate_gac_system <- function(params) {
           )
           ul_p <- max(1, min(ul_p, 40))  # guard against extremes
           crf_used <- r_disc * (1 + r_disc)^ul_p / ((1 + r_disc)^ul_p - 1)
-          # --- CALC_ANN_PV DEBUG ---
-          # Workbook AutoSize_Opt minimises annualized_cost (OUTPUT C417) = total_project * CRF + OM_annual
-          ann_val <- cap_r$total_project * crf_used + om_r$total_annual
-          cat(sprintf("[CALC_ANN_PV] n=%d d=%.1f bd=%.1f h=%.1f | vessels=%d | contactor=$%.0f | gac_init=$%.0f | pump=$%.0f | tank=$%.0f | piping=$%.0f | controls=$%.0f | site=$%.0f\n",
-                          n_try, actual_d, actual_bd, actual_h,
-                          con_r$total_contactors,
-                          con_r$total_cost,
-                          gac_r$initial_fill_cost,
-                          pmp_r$total_cost,
-                          tnk_r$total_cost,
-                          pip_r$total_cost,
-                          ctl_r$total_cost,
-                          sit_r$total_cost))
-          cat(sprintf("[CALC_ANN_PV] n=%d | direct=$%.0f | indirect=$%.0f | addon=$%.0f | total_project=$%.0f | om_annual=$%.0f | ul=%.1fyr | ann=$%.2f\n",
-                          n_try,
-                          cap_r$total_direct,
-                          cap_r$total_indirect,
-                          cap_r$addon_cost,
-                          cap_r$total_project,
-                          om_r$total_annual,
-                          ul_p,
-                          ann_val))
-          cat(sprintf("[CALC_ANN_PV_OM] n=%d | gac_makeup=$%.0f | gac_regen=$%.0f | bldg_maint=$%.0f | labor=$%.0f | misc=$%.0f | other=$%.0f\n",
-                          n_try,
-                          om_r$gac_makeup_cost   %||% 0,
-                          om_r$gac_regen_cost    %||% 0,
-                          om_r$building_maint    %||% 0,
-                          (om_r$manager_labor_cost %||% 0) + (om_r$clerical_labor_cost %||% 0) + (om_r$operator_labor_cost %||% 0),
-                          om_r$misc_allowance    %||% 0,
-                          om_r$total_annual - (om_r$gac_makeup_cost %||% 0) - (om_r$gac_regen_cost %||% 0) -
-                            (om_r$building_maint %||% 0) -
-                            (om_r$manager_labor_cost %||% 0) - (om_r$clerical_labor_cost %||% 0) -
-                            (om_r$operator_labor_cost %||% 0) - (om_r$misc_allowance %||% 0)))
-          # --- END CALC_ANN_PV DEBUG ---
-          list(ann = ann_val, valid = TRUE)
+
+          # OUTPUT C417: annualized_cost = total_project × CRF + total_annual_OM
+          # CRF is computed per-candidate using the candidate's own useful_life (ul_p).
+          list(ann = cap_r$total_project * crf_used + om_r$total_annual, valid = TRUE)
+
         }),
         error = function(e) {
           message(sprintf("  pv n=%d: WBS error — %s", n_try, conditionMessage(e)))
-          list(ann = Inf, valid = FALSE)
+          list(ann = Inf, valid = FALSE)   # Inf signals infeasible; outer loop skips
         })
       }
 
@@ -4464,8 +4525,13 @@ calculate_gac_system <- function(params) {
                         n_try, raw_d, comp_min_d, actual_d, raw_bd, max_bd_v, actual_bd,
                         (1 + bed_expansion) * actual_bd + freeboard, actual_h))
 
-        # Compute NRD for this candidate the same way calc_ann_pv does (INT(n/redund_freq))
-        dbg_nrd <- as.integer(n_try %/% redund_freq)
+        # Mirror the NRD formula used inside calc_ann_pv (CC C34) for debug logging
+        dbg_op_tanks <- as.integer(n_try) * as.integer(num_series)
+        dbg_nrd <- if (design_flow_mgd >= 1) {
+          as.integer(ceiling(n_try / redund_freq))
+        } else {
+          if (dbg_op_tanks == 1L) 1L else 0L
+        }
         dbg_total_vessels <- n_try * num_series + dbg_nrd
         dbg_sa <- pi * (actual_d / 2)^2
         dbg_gac_vol_per <- dbg_sa * actual_bd

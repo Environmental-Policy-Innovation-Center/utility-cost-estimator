@@ -1,0 +1,378 @@
+---
+title: "Consolidation Model Functions"
+author: "Gabriel Watson"
+date: "2026-01-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Libraries
+```{r}
+library(aws.s3)
+library(tidyverse)
+library(sf)
+library(stringr)
+#library(purr)
+library(tidyr)
+library(osrm)
+```
+
+
+## Data Import 
+```{r}
+national_water_system <- s3read_using(readRDS,
+                                      object = "s3://tech-team-data/national-dw-tool/clean/national/national_water_system.RData")
+
+pwsid_huc <- s3read_using(read.csv, object = "s3://tech-team-data/national-dw-tool/test-staged/pwsid_npdes_usts_rmps_imp.csv")%>%
+             select(pwsid, num_facilities)%>%
+             group_by(pwsid)%>%
+             summarize(num_facilities = sum(num_facilities, na.rm = TRUE))
+
+epa_sabs <- national_water_system[[1]] %>% st_as_sf()%>%
+            left_join(.,pwsid_huc)
+
+#join_check <- epa_sabs %>% filter(is.na(num_facilities))
+```
+
+
+## Helper Functions ##
+
+## 1. get_sabs
+## Takes a vector of SAB ids OR state abv and County Name
+## 'small' returns just pwsid,pws_name, and states_intersect
+```{r}
+get_sabs <- function(ids,size){
+  
+if(size == "small")
+{
+sabs <- epa_sabs %>%
+        filter(pwsid %in% ids)%>%
+        select(pwsid,pws_name,epic_states_intersect, service_connections_count, population_served_count, num_facilities)
+}
+else
+{
+sabs <- epa_sabs %>%
+        filter(pwsid %in% ids)
+}
+  
+return(sabs)
+}
+```
+
+
+
+
+```{r}
+library(openrouteservice)
+
+# Set your ORS API key once at the top of your script
+ors_api_key("eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjkxMDRlNmE2YmY0YzRhNmE4NGM4NTlmMTNiNmFjZWNjIiwiaCI6Im11cm11cjY0In0=")
+
+# Helper to replicate osrmTable using ORS matrix endpoint
+ors_distance_matrix <- function(src_geom, dst_geoms) {
+  # Build coordinate list: [longitude, latitude]
+  src_coords  <- st_coordinates(st_centroid(src_geom))
+  dst_coords  <- st_coordinates(st_centroid(dst_geoms))
+  
+  all_coords <- rbind(src_coords, dst_coords) %>%
+    as.data.frame() %>%
+    transmute(lon = X, lat = Y) %>%
+    pmap(~ c(..1, ..2))  # ORS expects list of c(lon, lat)
+  
+  n_src <- nrow(src_coords)
+  n_dst <- nrow(dst_coords)
+  
+  # ORS matrix: sources = index 0, destinations = indices 1..n
+  result <- ors_matrix(
+    locations  = all_coords,
+    sources    = 0:(n_src - 1),
+    destinations = n_src:(n_src + n_dst - 1),
+    metrics    = "distance",
+    profile    = "driving-car"
+  )
+  
+  # Returns distances in metres — same shape as osrmTable$distances
+  list(distances = matrix(result$distances, nrow = n_src))
+}
+```
+
+
+## 2. get_neighbors
+## Takes a df of pwsids
+## calcs centroid
+## calcs crow-flies distance between points
+## calcs distance as transit distance
+## pwsids, list(pwsid,centroid_distance,travel_distance)
+## TO DO - include all systems that just overlap no matter the centroid distance
+## TO DO - only run pairs on defined filter config for receiving and consolidating systems (see other TO DO in the logic run)
+```{r}
+get_neighbors <- function(sabs, cutoff) {
+  message("Calculating centroids...")
+  centroids <- st_centroid(sabs$geometry)
+  centroid_distance_matrix <- st_distance(centroids, centroids)
+  
+  message("Processing ", nrow(sabs), " pwsids...")
+  
+  df <- sabs %>%
+    mutate(rec = map(1:n(), function(i) {
+      if (i %% 10 == 0) message("  Processing pwsid ", i, " of ", n())
+      
+      centroid_distances <- as.numeric(centroid_distance_matrix[i, ]) * 0.000621371
+      matches <- tibble(
+        pwsid            = pwsid[-i],
+        centroid_distance = centroid_distances[-i]
+      ) %>%
+        filter(centroid_distance <= cutoff)
+      
+      if (nrow(matches) == 0) {
+        return(tibble(pwsid = character(), centroid_distance = numeric(),
+                      travel_distance = numeric(), overlap = logical()))
+      }
+      
+      parent_geom <- sabs$geometry[i]
+      child_geoms <- sabs$geometry[sabs$pwsid %in% matches$pwsid]
+      
+      # --- Replaced osrmTable with ORS ---
+      travel_table <- tryCatch(
+        ors_distance_matrix(parent_geom, child_geoms),
+        error = function(e) {
+          message("  ORS error for pwsid ", i, ": ", e$message,
+                  " — falling back to centroid distance")
+          NULL
+        }
+      )
+      
+      matches %>%
+        mutate(
+          travel_distance = if (!is.null(travel_table)) {
+            as.numeric(travel_table$distances) * 0.000621371
+          } else {
+            centroid_distance   # graceful fallback
+          },
+          overlap = st_overlaps(parent_geom, child_geoms, sparse = FALSE)[1, ]
+        ) %>%
+        filter(travel_distance <= cutoff)
+    })) %>%
+    mutate(rec_num_neighbors = map_int(rec, nrow))
+  
+  message("Unnesting results...")
+  df <- unnest(df, rec, names_sep = "_")
+  
+  df <- df %>%
+    left_join(
+      sabs %>%
+        data.frame() %>%
+        select(pwsid, num_facilities) %>%
+        rename(rec_pwsid = pwsid, rec_num_facilities = num_facilities)
+    ) %>%
+    mutate(rec_num_facilities = ifelse(is.na(rec_num_facilities), 0, rec_num_facilities))
+  
+  message("Complete! Found neighbors for ", nrow(df), " pairs")
+  return(df)
+}
+
+
+```
+
+
+
+## Takes a neighbor df
+## Calcs Costs 
+
+## Additional Input
+## xcost per mile 
+## xconnnection fees
+## xservice line costs 
+## xadmin costs
+
+
+## determined
+## xCEQA costs (based on intersect )
+## Additional costs 
+
+## Overhead/Additional 
+## Contingency
+## Planning and construction costs
+## Engineering Services
+## Inflation
+## Regional Multiplier
+```{r}
+get_costs <- function(neighbors,
+                       cost_per_mile,
+                       connection_fee,
+                       service_line_fee, 
+                       admin_cost,
+                       contingency_const,
+                       planning_constuction_const,
+                       engineering_services_const,
+                       inflation_const,
+                       regional_multiplier_const
+                       )
+{
+  
+  df <- neighbors %>%
+        mutate(new_source_cost = ifelse(rec_num_facilities > 0,0,1238933))%>% ## new source cost of $1,238,933 based on Greg's calcs 
+        mutate(pipe_line_cost = (rec_travel_distance * cost_per_mile))%>%
+        mutate(connection_fees = service_connections_count * connection_fee)%>%
+        mutate(service_line_cost = service_connections_count *service_line_fee)%>%
+        mutate(admin_costs = (pipe_line_cost +service_line_cost) * admin_cost)%>%
+        mutate(CEQA_cost = ifelse(rec_overlap == TRUE,25000,100000))%>%
+        rowwise()%>%
+        mutate(total_capital_costs = sum(c_across(new_source_cost:CEQA_cost)))%>%
+        mutate(contingency = total_capital_costs * contingency_const)%>%
+        mutate(planning_constuction = total_capital_costs * planning_constuction_const)%>%
+        mutate(engineering_services = total_capital_costs * engineering_services_const)%>%
+        mutate(inflation = total_capital_costs * inflation_const)%>%
+        mutate(regional_multiplier = total_capital_costs * regional_multiplier_const)%>%
+        rowwise()%>%
+        mutate(total_markup = sum(c_across(contingency:regional_multiplier)))%>%
+        mutate(total_project_cost = total_markup + total_capital_costs)
+  
+}
+
+```
+
+
+## filter_sabs
+## Consolidation Parms 
+## cons_system
+## - tbd 
+## - Violations
+## - ownership
+## - Service connection count
+## rec_system
+## - tbd 
+## - Violations 
+## - ownership
+## - Service connection count
+```{r}
+filter_sabs <- function(sabs, cons_sys_config, rec_sys_config)
+{
+  
+sdwis_sabs <- national_water_system[[2]] %>%
+              select(pwsid,owner_type,health_viols_10yr,open_health_viol)
+  
+owner_type_con <- cons_sys_config %>% pull(owner_type)
+owner_type_rec <-rec_sys_config %>% pull(owner_type)
+
+print(owner_type_con)
+cons_sabs <- sabs %>% 
+             left_join(.,sdwis_sabs)%>%
+             filter(health_viols_10yr >= cons_sys_config %>% pull(health_viols_10yr))%>%
+             filter(open_health_viol == open_health_viol)%>%
+             filter(owner_type == owner_type_con)%>%
+             filter(population_served_count <= cons_sys_config %>% pull(pop_served))%>%
+             pull(pwsid)
+
+rec_sabs <- sabs %>% 
+             left_join(.,sdwis_sabs)%>%
+             filter(health_viols_10yr <= rec_sys_config %>% pull(health_viols_10yr))%>%
+             filter(open_health_viol == open_health_viol)%>%
+             filter(owner_type == owner_type_rec)%>%
+             filter(population_served_count >= rec_sys_config %>% pull(pop_served))%>%
+             pull(pwsid)
+
+sabs_list <- list()
+sabs_list[[1]] <- cons_sabs 
+sabs_list[[2]] <- rec_sabs
+
+return(sabs_list)
+}
+
+``` 
+
+## regional stats
+```{r}
+get_regional_costs <- function(costs)
+{
+  
+regional_costs  <- costs %>%
+                   data.frame()%>%
+                   select(-c(geometry))%>%
+                   arrange(pwsid,total_project_cost)%>%
+                   distinct(pwsid, .keep_all = TRUE)%>%
+                   summarise(across(c(new_source_cost:total_project_cost), sum))
+                  
+  
+}
+
+
+```
+
+
+## Testing Corner
+```{r}
+
+## 1. Select based on state ##
+## TO DO: Select by county (need county match - not in data) ## 
+sab_test <- get_sabs(epa_sabs %>% filter(str_detect(epic_states_intersect, "MD")) %>% pull(pwsid),"small")
+
+
+### FILTER SABS #### x
+## quick mvp config for consolidating systems and receiving systems
+## TO DO ## Add all option to select all ownership types
+cons_sys_config <- data.frame(
+                  open_health_viol= c("No"),
+                  health_viols_10yr = c(1),
+                  owner_type = c("Private"),
+                  pop_served = c(1000))
+
+rec_sys_config <- data.frame(
+                  open_health_viol = c("No"),
+                  health_viols_10yr = c(1),
+                  owner_type = c("Local"),
+                  pop_served = c(10000))
+
+## returns list of sabs viable for receiving and consolidation 
+filtered_sabs_config <- filter_sabs(sab_test,cons_sys_config,rec_sys_config)
+
+## runs filter on state universe
+sab_test_filtered <- sab_test %>%
+                    filter(pwsid %in% filtered_sabs_config[[1]] | pwsid %in% filtered_sabs_config[[2]])
+
+## calculates the neighbor/consolidation pairs
+## TO DO - send the config to the get_neighbors and double check there so only receiving systems can receive and consolidating systems can consolidate - do this before running travel distance pairs so we don't obliterate the API with unneeded requests. 
+neighbors <- get_neighbors(sab_test_filtered,5) %>%
+             filter(pwsid %in% filtered_sabs_config[[1]])%>%
+             filter(rec_pwsid %in% filtered_sabs_config[[2]])
+
+
+
+## config for costs ## 
+cost_per_mile <- 1000000
+connection_fee <- 4000
+service_line_fee <- 6200
+admin_cost <- .15
+contingency_const <- .2
+planning_constuction_const <- .1
+engineering_services_const <- .15
+inflation_const <- .031
+regional_multiplier_const <- .1
+               
+
+## getting costs ## 
+costs <- get_costs(neighbors,
+                       cost_per_mile,
+                       connection_fee,
+                       service_line_fee, 
+                       admin_cost,
+                       contingency_const,
+                       planning_constuction_const,
+                       engineering_services_const,
+                       inflation_const,
+                       regional_multiplier_const)
+
+
+## getting regional costs ## 
+regional_costs <- get_regional_costs(costs) 
+
+
+
+```
+
+
+

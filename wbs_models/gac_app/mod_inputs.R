@@ -35,60 +35,212 @@ div(id = "loading-overlay",
               selected = get_contam_type()[8],
               width = "100%"
             ),
+            # ── "Other" Contaminant: required inputs ────────────────────────────
             shiny::conditionalPanel(
               condition = "input['contam_I'] == 'Other'",
               ns = ns,
+
+              tags$hr(style = "margin: 6px 0 14px;"),
+
+              # Contaminant Name
               textInput(
-                ns("cont_name"), "Contaminant Name"
-              )
-            ),
-            shiny::conditionalPanel(
-              condition = "input['contam_I'] == 'Other'",
-              ns = ns,
-              sliderInput(
-                ns("carbon_life_bed_vol"), "Typical Carbon Life (Bed Volumes)",
-                min = 5000, max = 80000, value = 40000
-              )
-            ),
-            shiny::conditionalPanel(
-              condition = "input['contam_I'] == 'Other'",
-              ns = ns,
-              sliderInput(
-                ns("carbon_life_months"), "Typical Carbon Life (Months)",
-                min = 6, max = 25, value = 12
-              )
-            ),
-            shiny::conditionalPanel(
-              condition = "input['contam_I'] == 'Other'",
-              ns = ns,
-              numericInput(
-                ns("ebct"), "EBCT (min)",
-                value = 7.5,
-                min = 7.5
-              )
-            ),
-            shiny::conditionalPanel(
-              condition = "input['contam_I'] == 'Other'",
-              ns = ns,
-              numericInput(
-                ns("number_contactors_series"), "Min Contactors in Series",
-                value = 1  
-              )
-            ),
-            shiny::conditionalPanel(
-              condition = "input['contam_I'] == 'Other'",
-              ns = ns,
-              numericInput(
-                ns("backwash_interval"), "Interval Between Backwashes",
-                value = 72
-              )
-            ),
-            shiny::conditionalPanel(
-              condition = "input['contam_I'] == 'Other'",
-              ns = ns,
-              selectInput(
-                ns("spent_carbon_managment"), "Spent Carbon Management",
-                c("Regeneration", "Disposal")
+                ns("cont_name"),
+                "Contaminant Name",
+                width = "100%"
+              ),
+
+              # ── Carbon Life ─────────────────────────────────────────────────────
+              tags$div(
+                style = "margin-top: 14px;",
+                tags$label("Carbon Life Input Type:", class = "control-label"),
+                radioButtons(
+                  ns("carbon_life_type"),
+                  label    = NULL,
+                  choices  = c(
+                    "Bed Volumes"         = "bed_volumes",
+                    "Months"              = "months",
+                    "Freundlich Isotherm" = "freundlich"
+                  ),
+                  selected = "bed_volumes",
+                  inline   = TRUE
+                ),
+                shiny::conditionalPanel(
+                  condition = "input['carbon_life_type'] == 'bed_volumes'",
+                  ns = ns,
+                  sliderInput(
+                    ns("carbon_life_bed_vol"),
+                    "Typical Carbon Life (bed volumes)",
+                    min = 5000, max = 65000, value = 40000, step = 1000,
+                    width = "100%"
+                  )
+                ),
+                shiny::conditionalPanel(
+                  condition = "input['carbon_life_type'] == 'months'",
+                  ns = ns,
+                  sliderInput(
+                    ns("carbon_life_months"),
+                    "Typical Carbon Life (months)",
+                    min = 6, max = 12, value = 9, step = 1,
+                    width = "100%"
+                  )
+                ),
+                shiny::conditionalPanel(
+                  condition = "input['carbon_life_type'] == 'freundlich'",
+                  ns = ns,
+                  fluidRow(
+                    column(
+                      6,
+                      numericInput(
+                        ns("freund_kf"),
+                        HTML("K<sub>f</sub> \u2014 (\u00b5g/g)(L/\u00b5g)<sup>1/n</sup>"),
+                        value = NA_real_, min = 0,
+                        width = "100%"
+                      )
+                    ),
+                    column(
+                      6,
+                      numericInput(
+                        ns("freund_1_n"),
+                        "1/n (dimensionless)",
+                        value = NA_real_, min = 0, max = 1, step = 0.01,
+                        width = "100%"
+                      )
+                    )
+                  )
+                )
+              ),
+
+              # ── Contaminant Removal ─────────────────────────────────────────────
+              tags$div(
+                style = "margin-top: 14px;",
+                tags$label("Contaminant Removal Input Type:", class = "control-label"),
+                radioButtons(
+                  ns("removal_input_type"),
+                  label    = NULL,
+                  choices  = c(
+                    "EBCT" = "ebct"
+                    # "Contaminant Removal %"              = "removal_pct",  # not yet implemented
+                    # "Influent & Effluent Concentrations" = "conc"           # not yet implemented
+                  ),
+                  selected = "ebct",
+                  inline   = TRUE
+                ),
+                shiny::conditionalPanel(
+                  condition = "input['removal_input_type'] == 'ebct'",
+                  ns = ns,
+                  numericInput(
+                    ns("ebct"),
+                    "Empty Bed Contact Time (EBCT) (min)",
+                    value = 7.5, min = 0.1, step = 0.5,
+                    width = "100%"
+                  )
+                )
+                # shiny::conditionalPanel(
+                #   condition = "input['removal_input_type'] == 'removal_pct'",
+                #   ns = ns,
+                #   numericInput(
+                #     ns("removal_pct"),
+                #     "Contaminant Removal (enter as fraction, e.g. 0.95)",
+                #     value = 0.95, min = 0, max = 1, step = 0.01,
+                #     width = "100%"
+                #   )
+                # ),
+                # shiny::conditionalPanel(
+                #   condition = "input['removal_input_type'] == 'conc'",
+                #   ns = ns,
+                #   fluidRow(
+                #     column(
+                #       6,
+                #       numericInput(
+                #         ns("C_0"),
+                #         "Influent Concentration (mg/L)",
+                #         value = NA_real_, min = 0,
+                #         width = "100%"
+                #       )
+                #     ),
+                #     column(
+                #       6,
+                #       numericInput(
+                #         ns("C_b"),
+                #         "Effluent Target (mg/L)",
+                #         value = NA_real_, min = 0,
+                #         width = "100%"
+                #       )
+                #     )
+                #   )
+                # )
+              ),
+
+              # ── System Parameters ───────────────────────────────────────────────
+              tags$div(
+                style = "margin-top: 14px;",
+                numericInput(
+                  ns("number_contactors_series"),
+                  "Min. Contactors in Series",
+                  value = 1, min = 1, step = 1,
+                  width = "100%"
+                ),
+                numericInput(
+                  ns("backwash_interval"),
+                  "Interval Between Backwashes (hrs)",
+                  value = 72, min = 1, step = 1,
+                  width = "100%"
+                ),
+                selectInput(
+                  ns("spent_carbon_managment"),
+                  "Spent Carbon Management",
+                  choices = c(
+                    "regeneration on-site",
+                    "regeneration off-site (non-hazardous)",
+                    "throwaway (non-hazardous)",
+                    "regeneration off-site (hazardous)",
+                    "throwaway (hazardous)",
+                    "throwaway (radioactive)",
+                    "throwaway (radioactive hazardous)"
+                  ),
+                  selected = "regeneration off-site (non-hazardous)",
+                  width = "100%"
+                ),
+                selectInput(
+                  ns("residuals_disposal"),
+                  "Discharge Option for Spent Backwash",
+                  choices = c(
+                    "surface water",
+                    "POTW",
+                    "recycle",
+                    "septic system",
+                    "evaporation pond"
+                  ),
+                  selected = "POTW",
+                  width = "100%"
+                ),
+                # Characteristics of solids — only required when evaporation pond selected
+                shiny::conditionalPanel(
+                  condition = "input['residuals_disposal'] == 'evaporation pond'",
+                  ns = ns,
+                  selectInput(
+                    ns("solids_haz"),
+                    "Characteristics of Evaporation Pond Solids",
+                    choices = c(
+                      "non-hazardous",
+                      "hazardous",
+                      "radioactive",
+                      "radioactive hazardous"
+                    ),
+                    selected = "non-hazardous",
+                    width = "100%"
+                  )
+                ),
+                selectInput(
+                  ns("gac_transfer_method"),
+                  "GAC Transfer Method",
+                  choices = c(
+                    "manual transfer",
+                    "eductors"
+                  ),
+                  selected = "manual transfer",
+                  width = "100%"
+                )
               )
             )
           )
@@ -327,6 +479,12 @@ inputsServer <- function(id) {
         if (input$contam_I == "" || input$design_type == "" || input$design_flow_I == "") {
           return()
         }
+
+        # "Other" uses UI inputs directly — clear any cached standard data and skip fetch
+        if (input$contam_I == "Other") {
+          standard_inputs_data(NULL)
+          return()
+        }
         
         # Fetch standard inputs from Google Sheets
         tryCatch({
@@ -483,70 +641,102 @@ inputsServer <- function(id) {
       get_standard_inputs_data = reactive(standard_inputs_data()),
       
       get_params = reactive({
+        is_other <- isTRUE(input$contam_I == "Other")
+        std      <- standard_inputs_data()
+
+        # Resolve carbon life type index (calculation code encoding:
+        #   1 = months, 2 = Freundlich isotherm, 3 = BDST, 4 = BV/EBCT)
+        other_freund_type <- if (is_other) {
+          switch(input$carbon_life_type,
+                 "bed_volumes" = 4L,   # BV/EBCT — bed volumes divided by EBCT
+                 "months"      = 1L,   # Direct months value
+                 "freundlich"  = 2L,   # Freundlich isotherm
+                 4L)
+        } else NULL
+
+        # Resolve contaminant removal type index
+        # (1 = contaminant removal %, 2 = influent/effluent conc, 3 = EBCT)
+        other_ebct_type <- if (is_other) {
+          switch(input$removal_input_type,
+                 "ebct"        = 3L,
+                 "removal_pct" = 1L,
+                 "conc"        = 2L,
+                 3L)
+        } else NULL
+
         list(
           # Flow rates
-          design_flow = input$design_flow_I,
-          design_flow_units = input$df_units,
-          average_flow = standard_inputs_data()$average_flow,
-          average_flow_units = standard_inputs_data()$average_flow_units,
-          
+          design_flow        = input$design_flow_I,
+          design_flow_units  = input$df_units,
+          average_flow       = std$average_flow,
+          average_flow_units = std$average_flow_units,
+
           # Contaminant
-          contaminant = input$contam_I,
-          influent_conc = standard_inputs_data()$C_0,
-          effluent_target = standard_inputs_data()$C_b,
-          
+          contaminant     = input$contam_I,
+          cont_name       = if (is_other) input$cont_name else NULL,
+          influent_conc   = if (is_other && isTRUE(input$removal_input_type == "conc")) input$C_0  else std$C_0,
+          effluent_target = if (is_other && isTRUE(input$removal_input_type == "conc")) input$C_b  else std$C_b,
+
           # Design type
           design_type = input$design_type,
-          
+
           # Design approach
-          ebct_type = standard_inputs_data()$ebct_input_type,
-          ebct = standard_inputs_data()$ebct,
-          freund_type = standard_inputs_data()$freund_type,
-          freund_1 = standard_inputs_data()$freund_1,
-          freund_2 = standard_inputs_data()$freund_2,
-          bed_life_direct = standard_inputs_data()$bed_life_direct,
-          
+          ebct_type = if (is_other) other_ebct_type else std$ebct_input_type,
+          ebct      = if (is_other && isTRUE(input$removal_input_type == "ebct")) input$ebct else std$ebct,
+
+          freund_type = if (is_other) other_freund_type else std$freund_type,
+          freund_1    = if (is_other) {
+            switch(input$carbon_life_type,
+                   "bed_volumes" = input$carbon_life_bed_vol,
+                   "months"      = input$carbon_life_months,
+                   "freundlich"  = input$freund_kf,
+                   input$carbon_life_bed_vol)
+          } else std$freund_1,
+          freund_2        = if (is_other && isTRUE(input$carbon_life_type == "freundlich")) input$freund_1_n else std$freund_2,
+          bed_life_direct = std$bed_life_direct,
+
           # Contactor configuration
-          tank_geometry = standard_inputs_data()$tank_geom_I,
-          num_trains = NULL,  # always auto-calculated from flow capacity; Num_tanks_I is contactors-in-series
-          num_contactors_in_series = standard_inputs_data()$Num_tanks_I,
-          redundancy = standard_inputs_data()$NRD_I,
-          bed_depth = standard_inputs_data()$bed_depth,
-          vessel_diameter = standard_inputs_data()$comm_diam,
-          vessel_height_length = standard_inputs_data()$comm_height_length,
-          basin_length = standard_inputs_data()$basin_length,
-          basin_width = standard_inputs_data()$basin_width,
-          basin_depth = standard_inputs_data()$basin_op_depth,
-          
+          tank_geometry            = std$tank_geom_I,
+          num_trains               = NULL,  # always auto-calculated; Num_tanks_I is contactors-in-series
+          num_contactors_in_series = if (is_other) input$number_contactors_series else std$Num_tanks_I,
+          redundancy               = std$NRD_I,
+          # For "Other", pass NULL so calculate_gac_system() runs AutoSize
+          bed_depth                = if (is_other) NULL else std$bed_depth,
+          vessel_diameter          = if (is_other) NULL else std$comm_diam,
+          vessel_height_length     = if (is_other) NULL else std$comm_height_length,
+          basin_length             = if (is_other) NULL else std$basin_length,
+          basin_width              = if (is_other) NULL else std$basin_width,
+          basin_depth              = if (is_other) NULL else std$basin_op_depth,
+
           # Backwash
-          no_backwash = standard_inputs_data()$no_backwash_I,
-          backwash_interval = standard_inputs_data()$back_interval_I,
-          no_backwash_tank = standard_inputs_data()$no_back_tank_I,
-          regen_type = standard_inputs_data()$regen_type_I,
-          
+          no_backwash       = std$no_backwash_I,
+          backwash_interval = if (is_other) input$backwash_interval else std$back_interval_I,
+          no_backwash_tank  = std$no_back_tank_I,
+          regen_type        = if (is_other) input$spent_carbon_managment else std$regen_type_I,
+
           # Residuals
-          residuals_disposal = standard_inputs_data()$res_s2_opt_I,
-          residuals_tank = standard_inputs_data()$res_s1_opt_I,
-          transfer_method = standard_inputs_data()$transfer_method_I,
-          solids_hazardous = standard_inputs_data()$solids_haz_I,
-          
+          residuals_disposal = if (is_other) input$residuals_disposal  else std$res_s2_opt_I,
+          residuals_tank     = std$res_s1_opt_I,
+          transfer_method    = if (is_other) input$gac_transfer_method  else std$transfer_method_I,
+          solids_hazardous   = if (is_other && isTRUE(input$residuals_disposal == "evaporation pond")) input$solids_haz else std$solids_haz_I,
+
           # Pumps
-          service_pumps = standard_inputs_data()$lines_pump_I,
-          backwash_pumps = standard_inputs_data()$back_pumps_I,
-          residuals_pumps = standard_inputs_data()$res_pumps_I,
-          
-          # Automation
-          automation_level = standard_inputs_data()$component_level_I,
-          manual_override = standard_inputs_data()$manual_I,
-          
+          service_pumps   = std$lines_pump_I,
+          backwash_pumps  = std$back_pumps_I,
+          residuals_pumps = std$res_pumps_I,
+
+          # Automation — pass NULL for "Other" so calculation uses its own defaults
+          automation_level = if (is_other) NULL else std$component_level_I,
+          manual_override  = if (is_other) NULL else std$manual_I,
+
           # Site
-          include_buildings = standard_inputs_data()$include_buildings_I,
-          include_hvac = standard_inputs_data()$include_HVAC_I,
-          include_land = standard_inputs_data()$include_land_I,
-          retrofit = standard_inputs_data()$retrofit_I,
-          
+          include_buildings = std$include_buildings_I,
+          include_hvac      = std$include_HVAC_I,
+          include_land      = std$include_land_I,
+          retrofit          = std$retrofit_I,
+
           # Standard inputs data (if available)
-          standard_inputs = standard_inputs_data()
+          standard_inputs = std
         )
       })
     )

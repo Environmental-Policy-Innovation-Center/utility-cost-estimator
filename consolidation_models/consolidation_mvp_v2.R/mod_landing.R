@@ -15,13 +15,13 @@ landingUI <- function(id) {
         div(
           class = "lp-hero-badge",
           tags$span("\u2666"),
-          " Built on SDWIS & EPIC Engineering Cost Models"
+          "Built on EPA Sourced Data and [insert methods + citation]"
         ),
-        h1("Map consolidation candidates \u2014 before you plan."),
+        h1("Identify water system consolidation candidates \u2014 before you plan."),
         p(
-          "A web-based tool for identifying candidate water system pairs and estimating",
+          "A web-based tool for identifying joining and receiving systems + estimating",
           "capital costs for physical consolidation. Designed for state agencies,",
-          "technical assistance providers, and utilities evaluating consolidation options."
+          "technical assistance providers, and utilities screening for consolidation options."
         ),
         div(
           class = "lp-hero-actions",
@@ -54,8 +54,8 @@ landingUI <- function(id) {
             HTML('<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2L3 6v8l7 4 7-4V6l-7-4z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 10v8M10 10l7-4M10 10L3 6" stroke="currentColor" stroke-width="1.5"/></svg>')
           ),
           div(
-            h3("SDWIS System Data"),
-            p("Candidate pairs are built from EPA\u2019s Safe Drinking Water Information System \u2014 the same database used in federal compliance and enforcement.")
+            h3("EPA Data - powered by EPIC "),
+            p("Utilizing US EPA's Safe Drinking Water Information System and Water System Service Area Boundaries data. Powered by EPIC's National Drinking Water Explorer")
           )
         ),
 
@@ -66,7 +66,7 @@ landingUI <- function(id) {
           ),
           div(
             h3("Transparent Cost Model"),
-            p("Every estimate traces to documented engineering assumptions: per-mile pipeline costs, connection fees, service lines, and indirect cost multipliers.")
+            p("Derived from UCLA & Stanford Research, every estimate traces to documented engineering assumptions adjustable based on user inputs: per-mile pipeline costs, connection fees, service lines, and indirect cost multipliers.")
           )
         ),
 
@@ -76,8 +76,8 @@ landingUI <- function(id) {
             HTML('<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M10 6v4l3 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>')
           ),
           div(
-            h3("GIS-Powered Routing"),
-            p("Candidate pairs are identified using spatial boundary overlap and road-network travel distance \u2014 so costs reflect real-world pipeline routing.")
+            h3("Pre-Computed GIS-Powered Routing"),
+            p("Leverages euclidean and transit distance metrics for pipeline length estimates - across +44,000 water systems \u2014 pre-computed for rapid analysis")
           )
         )
       )
@@ -120,79 +120,123 @@ landingUI <- function(id) {
         )
       )
     ),
-
-    # ── CONSOLIDATION MODELS ──
+    # ── USES ──
     div(
       id = ns("models_section"),
       class = "lp-section lp-tech-section",
       div(
         class = "lp-section-inner",
-        div(class = "lp-section-label", "Consolidation Types"),
-        div(class = "lp-section-title", "Available cost models"),
+        div(class = "lp-section-label", "Who Uses It"),
+        div(class = "lp-section-title", "Built for key water sector audiances"),
         div(class = "lp-section-desc",
-          "Each model targets a distinct consolidation pathway. We\u2019re expanding coverage as methodologies are validated."
+          "From federal rulemaking to community advocacy \u2014 a faster, more targeted alternative to the Drinking Water Infrastructure Needs Assessment or a multimillion-dollar study."
         ),
         div(
           class = "lp-tech-grid",
 
           div(class = "lp-tech-card",
             div(class = "lp-tech-header",
-              div(class = "lp-tech-name", "Physical Consolidation"),
-              tags$span(class = "lp-tech-status lp-status-live", "Live")
+              div(class = "lp-tech-name", "Federal & National Policy")
             ),
             div(class = "lp-tech-desc",
-              "Estimate capital costs for physically connecting a struggling system to a receiving system via new pipeline, service connections, and infrastructure."
+              "Federal agency staff and national policy organizations use the tool to get a national or state-level snapshot of CWS compliance and the cost of consolidation \u2014 without commissioning a major study."
             ),
             div(class = "lp-tech-contaminants",
-              tags$span(class = "lp-contaminant-tag", "Pipeline"),
-              tags$span(class = "lp-contaminant-tag", "Connections"),
-              tags$span(class = "lp-contaminant-tag", "New Source"),
-              tags$span(class = "lp-contaminant-tag", "CEQA/Permits")
+              tags$span(class = "lp-contaminant-tag", "National Snapshot"),
+              tags$span(class = "lp-contaminant-tag", "Rulemaking Support")
             )
           ),
 
           div(class = "lp-tech-card",
             div(class = "lp-tech-header",
-              div(class = "lp-tech-name", "Managerial Consolidation"),
-              tags$span(class = "lp-tech-status lp-status-soon", "Coming Soon")
+              div(class = "lp-tech-name", "State Regulators & SRF Programs")
             ),
             div(class = "lp-tech-desc",
-              "Model costs for governance-level consolidation \u2014 shared management, joint operations, or administrative merger without physical connection."
+              "State agency staff, funding program managers, and legislative staff use the tool to understand consolidation costs in their jurisdiction and model funding needs for a state-wide program to support physical consolidation"
             ),
             div(class = "lp-tech-contaminants",
-              tags$span(class = "lp-contaminant-tag", "Admin"),
-              tags$span(class = "lp-contaminant-tag", "Legal"),
-              tags$span(class = "lp-contaminant-tag", "Transition")
+              tags$span(class = "lp-contaminant-tag", "Primacy Agencies"),
+              tags$span(class = "lp-contaminant-tag", "Funding Programs"),
+              tags$span(class = "lp-contaminant-tag", "Legislative Staff")
             )
           ),
 
           div(class = "lp-tech-card",
             div(class = "lp-tech-header",
-              div(class = "lp-tech-name", "Emergency Interconnection"),
-              tags$span(class = "lp-tech-status lp-status-soon", "Coming Soon")
+              div(class = "lp-tech-name", "Technical Assistance Providers")
             ),
             div(class = "lp-tech-desc",
-              "Estimate costs for emergency tie-in connections \u2014 temporary or permanent infrastructure to address acute failures or drought vulnerability."
+              "TA providers pull comparative consolidation cost estimates regionally, or get a quick ballpark for a specific system they\u2019re already working with."
             ),
             div(class = "lp-tech-contaminants",
-              tags$span(class = "lp-contaminant-tag", "Tie-In"),
-              tags$span(class = "lp-contaminant-tag", "Temporary"),
-              tags$span(class = "lp-contaminant-tag", "Emergency")
+              tags$span(class = "lp-contaminant-tag", "Regional Comparisons"),
+              tags$span(class = "lp-contaminant-tag", "System-Level Estimates")
             )
           ),
 
           div(class = "lp-tech-card",
             div(class = "lp-tech-header",
-              div(class = "lp-tech-name", "Regionalization"),
-              tags$span(class = "lp-tech-status lp-status-soon", "Coming Soon")
+              div(class = "lp-tech-name", "Engineers & Planners")
             ),
             div(class = "lp-tech-desc",
-              "Model multi-system regional consolidation scenarios where multiple small systems connect to a central receiving utility."
+              "Engineers scoping a grant portfolio of 10\u201350 systems, or planners needing estimates for a large cohort of affected systems to bring to a funding board."
             ),
             div(class = "lp-tech-contaminants",
-              tags$span(class = "lp-contaminant-tag", "Multi-System"),
-              tags$span(class = "lp-contaminant-tag", "Regional"),
-              tags$span(class = "lp-contaminant-tag", "Shared Infra")
+              tags$span(class = "lp-contaminant-tag", "Multi-System Grants"),
+              tags$span(class = "lp-contaminant-tag", "State Planning")
+            )
+          ),
+
+          # div(class = "lp-tech-card",
+          #   div(class = "lp-tech-header",
+          #     div(class = "lp-tech-name", "Consulting Firms")
+          #   ),
+          #   div(class = "lp-tech-desc",
+          #     "Engineering and management consultants assessing the business opportunity in a region identify candidate systems and get upfront cost estimates before proposing a detailed engagement."
+          #   ),
+          #   div(class = "lp-tech-contaminants",
+          #     tags$span(class = "lp-contaminant-tag", "Market Sizing"),
+          #     tags$span(class = "lp-contaminant-tag", "Business Development")
+          #   )
+          # ),
+
+          # div(class = "lp-tech-card",
+          #   div(class = "lp-tech-header",
+          #     div(class = "lp-tech-name", "Larger Utilities")
+          #   ),
+          #   div(class = "lp-tech-desc",
+          #     "Larger systems interested in regionalization, or facing pressure to assist neighboring underperforming systems, use the tool to get a rough upfront cost estimate of absorbing or interconnecting with adjacent utilities."
+          #   ),
+          #   div(class = "lp-tech-contaminants",
+          #     tags$span(class = "lp-contaminant-tag", "Regionalization"),
+          #     tags$span(class = "lp-contaminant-tag", "TMF Assistance")
+          #   )
+          # ),
+
+          div(class = "lp-tech-card",
+            div(class = "lp-tech-header",
+              div(class = "lp-tech-name", "Environmental Justice & Advocacy")
+            ),
+            div(class = "lp-tech-desc",
+              "Community-based organizations use the tool to understand consolidation options for struggling systems in a region and build a funding ask to bring to state or federal representatives."
+            ),
+            div(class = "lp-tech-contaminants",
+              tags$span(class = "lp-contaminant-tag", "Advocacy"),
+              tags$span(class = "lp-contaminant-tag", "Funding Narratives")
+            )
+          ),
+
+          div(class = "lp-tech-card",
+            div(class = "lp-tech-header",
+              div(class = "lp-tech-name", "Academics, Local Officials & Media")
+            ),
+            div(class = "lp-tech-desc",
+              "Researchers studying water system vulnerability, local officials facing compliance pressure, and journalists covering drinking water use the tool to quickly scope the problem and its cost at any scale."
+            ),
+            div(class = "lp-tech-contaminants",
+              tags$span(class = "lp-contaminant-tag", "Research"),
+              tags$span(class = "lp-contaminant-tag", "Local Officials"),
+              tags$span(class = "lp-contaminant-tag", "Journalism")
             )
           )
         )

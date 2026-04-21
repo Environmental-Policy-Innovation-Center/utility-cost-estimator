@@ -30,6 +30,36 @@ state_choices <- c(
   "TN","TX","UT","VA","VT","WA","WI","WV","WY"
 )
 
+# Approximate bounding boxes: c(lng_min, lat_min, lng_max, lat_max)
+state_bbox <- list(
+  AK = c(-179.1, 51.2, -129.9, 71.4), AL = c(-88.5, 30.1, -84.9, 35.0),
+  AR = c(-94.6,  33.0, -89.6,  36.5), AZ = c(-114.8, 31.3, -109.0, 37.0),
+  CA = c(-124.4, 32.5, -114.1, 42.0), CO = c(-109.1, 36.9, -102.0, 41.0),
+  CT = c(-73.7,  40.9, -71.8,  42.1), DC = c(-77.1,  38.8, -76.9,  39.0),
+  DE = c(-75.8,  38.4, -75.0,  39.8), FL = c(-87.6,  24.4, -80.0,  31.0),
+  GA = c(-85.6,  30.4, -80.8,  35.0), HI = c(-160.2, 18.9, -154.8, 22.2),
+  IA = c(-96.6,  40.4, -90.1,  43.5), ID = c(-117.2, 42.0, -111.0, 49.0),
+  IL = c(-91.5,  36.9, -87.0,  42.5), IN = c(-88.1,  37.8, -84.8,  41.8),
+  KS = c(-102.1, 36.9, -94.6,  40.0), KY = c(-89.6,  36.5, -81.9,  39.1),
+  LA = c(-94.0,  28.9, -88.8,  33.0), MA = c(-73.5,  41.2, -69.9,  42.9),
+  MD = c(-79.5,  37.9, -75.0,  39.7), ME = c(-71.1,  43.0, -67.0,  47.5),
+  MI = c(-90.4,  41.7, -82.4,  48.3), MN = c(-97.2,  43.5, -89.5,  49.4),
+  MO = c(-95.8,  35.9, -89.1,  40.6), MS = c(-91.7,  30.1, -88.1,  35.0),
+  MT = c(-116.1, 44.4, -104.0, 49.0), NC = c(-84.3,  33.8, -75.5,  36.6),
+  ND = c(-104.0, 45.9, -96.5,  49.0), NE = c(-104.1, 40.0, -95.3,  43.0),
+  NH = c(-72.6,  42.7, -70.7,  45.3), NJ = c(-75.6,  38.9, -73.9,  41.4),
+  NM = c(-109.1, 31.3, -103.0, 37.0), NV = c(-120.0, 35.0, -114.0, 42.0),
+  NY = c(-79.8,  40.5, -71.9,  45.0), OH = c(-84.8,  38.4, -80.5,  42.3),
+  OK = c(-103.0, 33.6, -94.4,  37.0), OR = c(-124.6, 42.0, -116.5, 46.3),
+  PA = c(-80.5,  39.7, -74.7,  42.3), RI = c(-71.9,  41.1, -71.1,  42.0),
+  SC = c(-83.4,  32.0, -78.5,  35.2), SD = c(-104.1, 42.5, -96.4,  45.9),
+  TN = c(-90.3,  34.9, -81.6,  36.7), TX = c(-106.6, 25.8, -93.5,  36.5),
+  UT = c(-114.1, 37.0, -109.0, 42.0), VA = c(-83.7,  36.5, -75.2,  39.5),
+  VT = c(-73.4,  42.7, -71.5,  45.0), WA = c(-124.7, 45.5, -116.9, 49.0),
+  WI = c(-92.9,  42.5, -86.8,  47.1), WV = c(-82.6,  37.2, -77.7,  40.6),
+  WY = c(-111.1, 40.9, -104.1, 45.0)
+)
+
 # ── 1. Model functions -------------------------------------------------------
 
 load_state_data <- function(state) {
@@ -276,7 +306,7 @@ ui <- dashboardPage(
               tabsetPanel(
                 id = "tabs",
                 tabPanel("Potential Joining and Receiving Systems",        br(), DTOutput("results_table")),
-                tabPanel("Estimated Cost Chart",   br(), plotlyOutput("cost_chart", height = "320px")),
+                tabPanel("Estimated Cost Chart",   br(), uiOutput("chart_controls_ui"), plotlyOutput("cost_chart", height = "360px")),
                 tabPanel("Estimated Cost Summary", br(), uiOutput("cost_summary_ui"))
               )
             )
@@ -464,11 +494,16 @@ server <- function(input, output, session) {
             sprintf("Loaded %d candidate pairs for %s.", nrow(dat$neighbors), input$state),
             type = "message", duration = 3
           )
-          bbox <- st_bbox(dat$sys_geo)
-          leafletProxy("map") %>%
-            clearShapes() %>% clearControls() %>%
-            fitBounds(bbox[[1]], bbox[[2]], bbox[[3]], bbox[[4]])
+          leafletProxy("map") %>% clearShapes() %>% clearControls()
           goto_step(2)
+          # Delay fitBounds until after goto_step's layout reflow settles
+          local({
+            st <- input$state
+            shinyjs::delay(200, {
+              bb <- state_bbox[[st]]
+              if (!is.null(bb)) leafletProxy("map") %>% fitBounds(bb[1], bb[2], bb[3], bb[4])
+            })
+          })
         }, error = function(e) {
           showNotification(paste("S3 load failed:", e$message), type = "error", duration = 8)
         })
@@ -553,10 +588,21 @@ server <- function(input, output, session) {
 
   # ── Map base tile (rendered once) ──────────────────────────────────────────
   output$map <- renderLeaflet({
+    bb <- state_bbox[["CA"]]
     leaflet() %>%
+      addMapPane("receiving",     zIndex = 410) %>%
+      addMapPane("consolidating", zIndex = 420) %>%
       addProviderTiles(providers$CartoDB.Positron) %>%
-      setView(lng = -95, lat = 37, zoom = 4)
+      fitBounds(bb[1], bb[2], bb[3], bb[4])
   })
+
+  # ── Zoom to selected state (no data load) ──────────────────────────────────
+  observeEvent(input$state, {
+    bb <- state_bbox[[input$state]]
+    req(bb)
+    leafletProxy("map") %>%
+      fitBounds(bb[1], bb[2], bb[3], bb[4])
+  }, ignoreInit = TRUE)
 
   # ── Draw ALL base polygons once when costs are computed ────────────────────
   observeEvent(rv$costs, {
@@ -583,8 +629,8 @@ server <- function(input, output, session) {
       left_join(rec_info, by = c("pwsid" = "rec_pwsid"))
 
     bbox <- st_bbox(bind_rows(
-      cons_sf %>% select(geometry),
-      rec_sf  %>% select(geometry)
+      cons_sf %>% select(geometry)#,
+    #  rec_sf  %>% select(geometry)
     ))
 
     leafletProxy("map") %>%
@@ -594,6 +640,7 @@ server <- function(input, output, session) {
         data = cons_sf, group = "base",
         fillColor = "green", fillOpacity = 0.45,
         color = "darkgreen", weight = 1.5,
+        options = pathOptions(pane = "consolidating"),
         layerId = ~pwsid,
         popup = ~paste0(
           "<b>", pws_name, "</b><br>", pwsid,
@@ -607,6 +654,7 @@ server <- function(input, output, session) {
         data = rec_sf, group = "base",
         fillColor = "steelblue", fillOpacity = 0.35,
         color = "navy", weight = 1.5,
+        options = pathOptions(pane = "receiving"),
         layerId = ~pwsid,
         popup = ~paste0(
           "<b>", rec_pws_name, "</b><br>", pwsid,
@@ -650,8 +698,8 @@ server <- function(input, output, session) {
       left_join(partner_info, by = c("pwsid" = "rec_pwsid"))
 
     bbox <- st_bbox(bind_rows(
-      sel_sf     %>% select(geometry),
-      partner_sf %>% select(geometry)
+      sel_sf     %>% select(geometry)#,
+     # partner_sf %>% select(geometry)
     ))
 
     leafletProxy("map") %>%
@@ -660,6 +708,7 @@ server <- function(input, output, session) {
         data = partner_sf, group = "highlight",
         fillColor = "#1e90ff", fillOpacity = 0.7,
         color = "darkblue", weight = 2.5,
+        options = pathOptions(pane = "receiving"),
         popup = ~paste0(
           "<b>", rec_pws_name, "</b><br>", pwsid,
           "<br>Pop: ", scales::comma(rec_population_served_count),
@@ -671,6 +720,7 @@ server <- function(input, output, session) {
         data = sel_sf, group = "highlight",
         fillColor = "#2ecc71", fillOpacity = 0.85,
         color = "#145a32", weight = 3,
+        options = pathOptions(pane = "consolidating"),
         popup = ~paste0(
           "<b>", pws_name, "</b><br>", pwsid,
           "<br>Pop: ", scales::comma(population_served_count),
@@ -724,7 +774,7 @@ server <- function(input, output, session) {
         "Est. Consolidating Capital Costs"      = total_capital_costs,
         "Est. Markup"             = total_markup
       ) %>%
-      datatable(selection = "single", rownames = FALSE,
+      datatable(selection = list(mode = "single", selected = 1), rownames = FALSE,
                 options = list(pageLength = 8, scrollX = TRUE, dom = "tip"))
   })
 
@@ -737,6 +787,29 @@ server <- function(input, output, session) {
     rv$selected_pair <- pair_row$rec_pwsid
   })
 
+  # ── Cost chart controls ────────────────────────────────────────────────────
+  output$chart_controls_ui <- renderUI({
+    req(rv$costs, rv$selected_cons)
+    pairs   <- rv$costs %>% filter(pwsid == rv$selected_cons)
+    n_pairs <- length(unique(pairs$rec_pwsid))
+    if (n_pairs <= 1) return(NULL)
+
+    pair_choices <- pairs %>%
+      distinct(rec_pwsid, rec_pws_name) %>%
+      { setNames(.$rec_pwsid, .$rec_pws_name) }
+
+    div(
+      style = "display:flex; align-items:center; gap:20px; margin-bottom:6px;",
+      radioButtons("chart_view", NULL,
+                   choices  = c("All Pairs" = "all", "Single Pair" = "single"),
+                   selected = "all", inline = TRUE),
+      conditionalPanel(
+        condition = "input.chart_view === 'single'",
+        selectInput("chart_pair", NULL, choices = pair_choices, width = "280px")
+      )
+    )
+  })
+
   # ── Cost chart ─────────────────────────────────────────────────────────────
   output$cost_chart <- renderPlotly({
     req(rv$costs, rv$selected_cons, "total_project_cost" %in% names(rv$costs))
@@ -746,22 +819,65 @@ server <- function(input, output, session) {
                    "contingency", "planning_constuction", "engineering_services",
                    "inflation", "regional_multiplier")
 
+    component_labels <- c(
+      new_source_cost      = "New Source",
+      pipe_line_cost       = "Pipeline",
+      connection_fees      = "Connections",
+      service_line_cost    = "Service Lines",
+      admin_costs          = "Admin",
+      CEQA_cost            = "Permits/CEQA",
+      contingency          = "Contingency",
+      planning_constuction = "Planning & CM",
+      engineering_services = "Engineering",
+      inflation            = "Inflation",
+      regional_multiplier  = "Regional Adj."
+    )
+
+    view_mode <- if (!is.null(input$chart_view)) input$chart_view else "all"
+    pair_id   <- if (!is.null(input$chart_pair)) input$chart_pair else NULL
+
     plot_df <- rv$costs %>%
       filter(pwsid == rv$selected_cons) %>%
-      { if (!is.null(rv$selected_pair)) filter(., rec_pwsid == rv$selected_pair) else . } %>%
+      { if (view_mode == "single" && !is.null(pair_id)) filter(., rec_pwsid == pair_id) else . } %>%
       select(rec_pws_name, all_of(cost_cols)) %>%
       pivot_longer(-rec_pws_name, names_to = "component", values_to = "cost") %>%
-      mutate(component = str_replace_all(component, "_", " ") %>% str_to_title())
+      mutate(
+        component    = factor(component_labels[component], levels = component_labels),
+        rec_pws_name = stringr::str_wrap(rec_pws_name, 20)
+      )
 
-    plot_ly(plot_df, x = ~rec_pws_name, y = ~cost, color = ~component,
-            type = "bar", text = ~dollar(cost), textposition = "none",
-            hovertemplate = "%{x}<br>%{data.name}: %{y:$,.0f}<extra></extra>") %>%
+    p <- ggplot(
+      plot_df,
+      aes(
+        x    = component,
+        y    = cost,
+        fill = rec_pws_name,
+        text = paste0(rec_pws_name, "\n", component, ": ", scales::dollar(cost))
+      )
+    ) +
+      geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+      scale_y_continuous(
+        labels = scales::label_dollar(scale_cut = scales::cut_short_scale()),
+        expand = expansion(mult = c(0, 0.06))
+      ) +
+      scale_fill_brewer(palette = "Blues", direction = 1) +
+      labs(x = NULL, y = "Cost", fill = "Receiving System") +
+      theme_minimal(base_size = 11) +
+      theme(
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor   = element_blank(),
+        axis.text.x        = element_text(angle = 35, hjust = 1, size = 9),
+        legend.position    = "right",
+        legend.key.size    = unit(0.45, "cm"),
+        legend.text        = element_text(size = 8),
+        plot.background    = element_rect(fill = "white", color = NA),
+        panel.background   = element_rect(fill = "white", color = NA)
+      )
+
+    ggplotly(p, tooltip = "text") %>%
       layout(
-        barmode = "stack",
-        xaxis   = list(title = "Receiving System"),
-        yaxis   = list(title = "Cost ($)", tickformat = "$,.0f"),
-        legend  = list(orientation = "h", y = -0.25),
-        margin  = list(b = 100)
+        legend = list(font = list(size = 10)),
+        margin = list(b = 80, r = 20)
       )
   })
 

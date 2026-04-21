@@ -118,9 +118,9 @@ div(id = "loading-overlay",
                   ns("removal_input_type"),
                   label    = NULL,
                   choices  = c(
-                    "EBCT"                               = "ebct",
-                    "Contaminant Removal %"              = "removal_pct",
-                    "Influent & Effluent Concentrations" = "conc"
+                    "EBCT" = "ebct"
+                    # "Contaminant Removal %"              = "removal_pct",  # not yet implemented
+                    # "Influent & Effluent Concentrations" = "conc"           # not yet implemented
                   ),
                   selected = "ebct",
                   inline   = TRUE
@@ -134,41 +134,41 @@ div(id = "loading-overlay",
                     value = 7.5, min = 0.1, step = 0.5,
                     width = "100%"
                   )
-                ),
-                shiny::conditionalPanel(
-                  condition = "input['removal_input_type'] == 'removal_pct'",
-                  ns = ns,
-                  numericInput(
-                    ns("removal_pct"),
-                    "Contaminant Removal (enter as fraction, e.g. 0.95)",
-                    value = 0.95, min = 0, max = 1, step = 0.01,
-                    width = "100%"
-                  )
-                ),
-                shiny::conditionalPanel(
-                  condition = "input['removal_input_type'] == 'conc'",
-                  ns = ns,
-                  fluidRow(
-                    column(
-                      6,
-                      numericInput(
-                        ns("C_0"),
-                        "Influent Concentration (mg/L)",
-                        value = NA_real_, min = 0,
-                        width = "100%"
-                      )
-                    ),
-                    column(
-                      6,
-                      numericInput(
-                        ns("C_b"),
-                        "Effluent Target (mg/L)",
-                        value = NA_real_, min = 0,
-                        width = "100%"
-                      )
-                    )
-                  )
                 )
+                # shiny::conditionalPanel(
+                #   condition = "input['removal_input_type'] == 'removal_pct'",
+                #   ns = ns,
+                #   numericInput(
+                #     ns("removal_pct"),
+                #     "Contaminant Removal (enter as fraction, e.g. 0.95)",
+                #     value = 0.95, min = 0, max = 1, step = 0.01,
+                #     width = "100%"
+                #   )
+                # ),
+                # shiny::conditionalPanel(
+                #   condition = "input['removal_input_type'] == 'conc'",
+                #   ns = ns,
+                #   fluidRow(
+                #     column(
+                #       6,
+                #       numericInput(
+                #         ns("C_0"),
+                #         "Influent Concentration (mg/L)",
+                #         value = NA_real_, min = 0,
+                #         width = "100%"
+                #       )
+                #     ),
+                #     column(
+                #       6,
+                #       numericInput(
+                #         ns("C_b"),
+                #         "Effluent Target (mg/L)",
+                #         value = NA_real_, min = 0,
+                #         width = "100%"
+                #       )
+                #     )
+                #   )
+                # )
               ),
 
               # ── System Parameters ───────────────────────────────────────────────
@@ -479,6 +479,12 @@ inputsServer <- function(id) {
         if (input$contam_I == "" || input$design_type == "" || input$design_flow_I == "") {
           return()
         }
+
+        # "Other" uses UI inputs directly — clear any cached standard data and skip fetch
+        if (input$contam_I == "Other") {
+          standard_inputs_data(NULL)
+          return()
+        }
         
         # Fetch standard inputs from Google Sheets
         tryCatch({
@@ -638,14 +644,14 @@ inputsServer <- function(id) {
         is_other <- isTRUE(input$contam_I == "Other")
         std      <- standard_inputs_data()
 
-        # Resolve carbon life type index (matches workbook freund_type encoding:
-        #   1 = months, 2 = Freundlich isotherm, 3 = bed volumes)
+        # Resolve carbon life type index (calculation code encoding:
+        #   1 = months, 2 = Freundlich isotherm, 3 = BDST, 4 = BV/EBCT)
         other_freund_type <- if (is_other) {
           switch(input$carbon_life_type,
-                 "bed_volumes" = 3L,
-                 "months"      = 1L,
-                 "freundlich"  = 2L,
-                 3L)
+                 "bed_volumes" = 4L,   # BV/EBCT — bed volumes divided by EBCT
+                 "months"      = 1L,   # Direct months value
+                 "freundlich"  = 2L,   # Freundlich isotherm
+                 4L)
         } else NULL
 
         # Resolve contaminant removal type index
@@ -694,12 +700,13 @@ inputsServer <- function(id) {
           num_trains               = NULL,  # always auto-calculated; Num_tanks_I is contactors-in-series
           num_contactors_in_series = if (is_other) input$number_contactors_series else std$Num_tanks_I,
           redundancy               = std$NRD_I,
-          bed_depth                = std$bed_depth,
-          vessel_diameter          = std$comm_diam,
-          vessel_height_length     = std$comm_height_length,
-          basin_length             = std$basin_length,
-          basin_width              = std$basin_width,
-          basin_depth              = std$basin_op_depth,
+          # For "Other", pass NULL so calculate_gac_system() runs AutoSize
+          bed_depth                = if (is_other) NULL else std$bed_depth,
+          vessel_diameter          = if (is_other) NULL else std$comm_diam,
+          vessel_height_length     = if (is_other) NULL else std$comm_height_length,
+          basin_length             = if (is_other) NULL else std$basin_length,
+          basin_width              = if (is_other) NULL else std$basin_width,
+          basin_depth              = if (is_other) NULL else std$basin_op_depth,
 
           # Backwash
           no_backwash       = std$no_backwash_I,
@@ -718,9 +725,9 @@ inputsServer <- function(id) {
           backwash_pumps  = std$back_pumps_I,
           residuals_pumps = std$res_pumps_I,
 
-          # Automation
-          automation_level = std$component_level_I,
-          manual_override  = std$manual_I,
+          # Automation — pass NULL for "Other" so calculation uses its own defaults
+          automation_level = if (is_other) NULL else std$component_level_I,
+          manual_override  = if (is_other) NULL else std$manual_I,
 
           # Site
           include_buildings = std$include_buildings_I,

@@ -134,7 +134,7 @@ ui <- dashboardPage(
                <circle cx="12" cy="6" r="2" fill="#0e8a7d"/>
                <path d="M8 20h8" stroke="rgba(255,255,255,0.4)" stroke-width="1.5" stroke-linecap="round"/>
              </svg>'),
-        "EPIC-Tech \u2014 Water System Consolidation"
+        "Physical Consolidation Cost Estimate Tool"
       ),
       tags$div(
         class = "topnav-links",
@@ -153,123 +153,131 @@ ui <- dashboardPage(
         div(class = "tool-content",
           sidebarLayout(
             sidebarPanel(
-              width = 4,
+              width = 3,
 
-              # Step 1
-              div(class = "sidebar-section",
-                  h5(HTML('<span class="step-badge">1</span>Select State')),
-                  div(class = "filter-row",
-                      tags$label("State"),
-                      div(class = "filter-input",
-                          selectInput("state", NULL, choices = state_choices, selected = "HI"))
-                  ),
-                  actionButton("btn_state", "Load State", class = "btn-primary btn-step btn-sm")
+              # ── Sticky Run Example banner ──
+              div(class = "example-sticky",
+                actionButton(
+                  "btn_example",
+                  tagList(icon("play"), "Run Example"),
+                  class = "btn-example-run"
+                ),
+                div(class = "example-sub", "California \u00b7 default settings")
               ),
 
-              # Step 2
-              div(class = "sidebar-section",
-                  h5(HTML('<span class="step-badge">2</span>Define Systems')),
+              # ── Wizard step indicator ──
+              uiOutput("wizard_header"),
 
-                  div(class = "filter-section-label", "Consolidating System Characteristics"),
-                  div(class = "filter-row",
-                      tags$label("Owner Type"),
-                      div(class = "filter-input",
-                          selectInput("cons_owner", NULL, choices = owner_types, selected = "All"))),
-                  div(class = "filter-row",
-                      tags$label("Min Health Violations (10yr)"),
-                      div(class = "filter-input",
-                          numericInput("cons_viols", NULL, value = 1, min = 0, step = 1))),
-                  div(class = "filter-row",
-                      tags$label("Max Population Served"),
-                      div(class = "filter-input",
-                          numericInput("cons_max_pop", NULL, value = 1000, min = 0, step = 100))),
-                  div(class = "filter-row",
-                      tags$label("Open Health Violation"),
-                      div(class = "filter-input",
-                          selectInput("cons_open_viol", NULL, choices = c("Yes","No"), selected = "No"))),
-
-                  tags$hr(style = "margin: 8px 0;"),
-                  div(class = "filter-section-label", "Receiving System Characteristics"),
-                  div(class = "filter-row",
-                      tags$label("Owner Type"),
-                      div(class = "filter-input",
-                          selectInput("rec_owner", NULL, choices = owner_types, selected = "All"))),
-                  div(class = "filter-row",
-                      tags$label("Max Health Violations (10yr)"),
-                      div(class = "filter-input",
-                          numericInput("rec_viols", NULL, value = 1, min = 0, step = 1))),
-                  div(class = "filter-row",
-                      tags$label("Min Population Served"),
-                      div(class = "filter-input",
-                          numericInput("rec_min_pop", NULL, value = 10000, min = 0, step = 500))),
-                  div(class = "filter-row",
-                      tags$label("Open Health Violation"),
-                      div(class = "filter-input",
-                          selectInput("rec_open_viol", NULL, choices = c("Yes","No"), selected = "No"))),
-
-                  tags$hr(style = "margin: 8px 0;"),
-                  div(class = "filter-row",
-                      tags$label("Distance Cutoff (miles)"),
-                      div(class = "filter-input",
-                          numericInput("cutoff", NULL, value = 25, min = 1))),
-
-                  actionButton("btn_define", "Define Systems", class = "btn-success btn-step btn-sm")
+              # ── Step 1: Select State ──
+              div(id = "wizard-step-1",
+                div(class = "filter-row",
+                  tags$label("State"),
+                  div(class = "filter-input",
+                    selectInput("state", NULL, choices = state_choices, selected = "CA"))
+                )
               ),
 
-              # Step 3
-              div(class = "sidebar-section",
-                  h5(HTML('<span class="step-badge">3</span>Cost Parameters')),
-                  div(class = "filter-row",
-                      tags$label("Cost per Mile ($)"),
-                      div(class = "filter-input",
-                          numericInput("cost_per_mile", NULL, value = 1000000, min = 0))),
-                  div(class = "filter-row",
-                      tags$label("Connection Fee ($)"),
-                      div(class = "filter-input",
-                          numericInput("connection_fee", NULL, value = 4000, min = 0))),
-                  div(class = "filter-row",
-                      tags$label("Service Line Fee ($)"),
-                      div(class = "filter-input",
-                          numericInput("service_line", NULL, value = 6200, min = 0))),
-                  div(class = "filter-row",
-                      tags$label("Admin Cost (%)"),
-                      div(class = "filter-input",
-                          numericInput("admin_cost", NULL, value = 0.15, step = 0.01))),
-                  div(class = "filter-row",
-                      tags$label("Contingency (%)"),
-                      div(class = "filter-input",
-                          numericInput("contingency", NULL, value = 0.20, step = 0.01))),
-                  div(class = "filter-row",
-                      tags$label("Planning & Const. (%)"),
-                      div(class = "filter-input",
-                          numericInput("planning", NULL, value = 0.10, step = 0.01))),
-                  div(class = "filter-row",
-                      tags$label("Engineering (%)"),
-                      div(class = "filter-input",
-                          numericInput("engineering", NULL, value = 0.15, step = 0.01))),
-                  div(class = "filter-row",
-                      tags$label("Inflation (%)"),
-                      div(class = "filter-input",
-                          numericInput("inflation", NULL, value = 0.031, step = 0.001))),
-                  div(class = "filter-row",
-                      tags$label("Regional Multiplier (%)"),
-                      div(class = "filter-input",
-                          numericInput("regional", NULL, value = 0.10, step = 0.01))),
-                  actionButton("btn_run", "Run Analysis", class = "btn-danger btn-step btn-sm")
-              ),
+              # ── Step 2: Define Systems ──
+              shinyjs::hidden(div(id = "wizard-step-2",
+                div(class = "filter-section-label", "Joining System"),
+                div(class = "filter-row",
+                  tags$label("Owner Type"),
+                  div(class = "filter-input",
+                    selectInput("cons_owner", NULL, choices = owner_types, selected = "All"))),
+                div(class = "filter-row",
+                  tags$label("Min Health Violations (10yr)"),
+                  div(class = "filter-input",
+                    numericInput("cons_viols", NULL, value = 1, min = 0, step = 1))),
+                div(class = "filter-row",
+                  tags$label("Max Population Served"),
+                  div(class = "filter-input",
+                    numericInput("cons_max_pop", NULL, value = 1000, min = 0, step = 100))),
+                div(class = "filter-row",
+                  tags$label("Open Health Violation"),
+                  div(class = "filter-input",
+                    selectInput("cons_open_viol", NULL, choices = c("Yes","No"), selected = "No"))),
+
+                tags$hr(style = "margin: 8px 0;"),
+                div(class = "filter-section-label", "Receiving System"),
+                div(class = "filter-row",
+                  tags$label("Owner Type"),
+                  div(class = "filter-input",
+                    selectInput("rec_owner", NULL, choices = owner_types, selected = "All"))),
+                div(class = "filter-row",
+                  tags$label("Max Health Violations (10yr)"),
+                  div(class = "filter-input",
+                    numericInput("rec_viols", NULL, value = 1, min = 0, step = 1))),
+                div(class = "filter-row",
+                  tags$label("Min Population Served"),
+                  div(class = "filter-input",
+                    numericInput("rec_min_pop", NULL, value = 10000, min = 0, step = 500))),
+                div(class = "filter-row",
+                  tags$label("Open Health Violation"),
+                  div(class = "filter-input",
+                    selectInput("rec_open_viol", NULL, choices = c("Yes","No"), selected = "No"))),
+
+                tags$hr(style = "margin: 8px 0;"),
+                div(class = "filter-row",
+                  tags$label("Distance Cutoff (miles)"),
+                  div(class = "filter-input",
+                    numericInput("cutoff", NULL, value = 3, min = .1, max = 5)))
+              )),
+
+              # ── Step 3: Cost Parameters ──
+              shinyjs::hidden(div(id = "wizard-step-3",
+                div(class = "filter-row",
+                  tags$label("Cost per Mile ($)"),
+                  div(class = "filter-input",
+                    numericInput("cost_per_mile", NULL, value = 1000000, min = 0))),
+                div(class = "filter-row",
+                  tags$label("Per Customer Connection Fee ($)"),
+                  div(class = "filter-input",
+                    numericInput("connection_fee", NULL, value = 4000, min = 0))),
+                div(class = "filter-row",
+                  tags$label("Service Line Fee ($)"),
+                  div(class = "filter-input",
+                    numericInput("service_line", NULL, value = 6200, min = 0))),
+                div(class = "filter-row",
+                  tags$label("Admin Cost (%)"),
+                  div(class = "filter-input",
+                    numericInput("admin_cost", NULL, value = 15, min = 0, step = 1))),
+                div(class = "filter-row",
+                  tags$label("Contingency (%)"),
+                  div(class = "filter-input",
+                    numericInput("contingency", NULL, value = 20, min = 0, step = 1))),
+                div(class = "filter-row",
+                  tags$label("Planning & Const. (%)"),
+                  div(class = "filter-input",
+                    numericInput("planning", NULL, value = 10, min = 0, step = 1))),
+                div(class = "filter-row",
+                  tags$label("Engineering (%)"),
+                  div(class = "filter-input",
+                    numericInput("engineering", NULL, value = 15, min = 0, step = 1))),
+                div(class = "filter-row",
+                  tags$label("Inflation (%)"),
+                  div(class = "filter-input",
+                    numericInput("inflation", NULL, value = 3.1, min = 0, step = 0.1))),
+                div(class = "filter-row",
+                  tags$label("Regional Multiplier (%)"),
+                  div(class = "filter-input",
+                    numericInput("regional", NULL, value = 10, min = 0, step = 1)))
+              )),
+
+              # ── Wizard navigation ──
+              uiOutput("wizard_nav"),
 
               uiOutput("status_ui")
             ),
 
             mainPanel(
-              width = 8,
+              width = 9,
               leafletOutput("map", height = "420px"),
               br(),
               tabsetPanel(
                 id = "tabs",
-                tabPanel("Consolidation Pairs",        br(), DTOutput("results_table")),
-                tabPanel("Consolidating Cost Chart",   br(), plotlyOutput("cost_chart", height = "320px")),
-                tabPanel("Consolidation Cost Summary", br(), uiOutput("cost_summary_ui"))
+                tabPanel("Potential Joining and Receiving Systems",        br(), DTOutput("results_table")),
+                tabPanel("Estimated Cost Chart",   br(), plotlyOutput("cost_chart", height = "320px")),
+                tabPanel("Estimated Cost Summary", br(), uiOutput("cost_summary_ui"))
               )
             )
           )
@@ -305,6 +313,74 @@ server <- function(input, output, session) {
   # Landing page module
   landingServer("landing", parent_session = session)
 
+  # ── Run Example: CA + defaults ─────────────────────────────────────────────
+  observeEvent(input$btn_example, {
+    updateTabItems(session, "sidebar", "tool")
+
+    # Reset all inputs to example defaults
+    updateSelectInput(session,  "state",         selected = "CA")
+    updateSelectInput(session,  "cons_owner",    selected = "All")
+    updateNumericInput(session, "cons_viols",    value = 1)
+    updateNumericInput(session, "cons_max_pop",  value = 1000)
+    updateSelectInput(session,  "cons_open_viol",selected = "No")
+    updateSelectInput(session,  "rec_owner",     selected = "All")
+    updateNumericInput(session, "rec_viols",     value = 1)
+    updateNumericInput(session, "rec_min_pop",   value = 10000)
+    updateSelectInput(session,  "rec_open_viol", selected = "No")
+    updateNumericInput(session, "cutoff",        value = 3)
+    updateNumericInput(session, "cost_per_mile", value = 1000000)
+    updateNumericInput(session, "connection_fee",value = 4000)
+    updateNumericInput(session, "service_line",  value = 6200)
+    updateNumericInput(session, "admin_cost",    value = 15)
+    updateNumericInput(session, "contingency",   value = 20)
+    updateNumericInput(session, "planning",      value = 10)
+    updateNumericInput(session, "engineering",   value = 15)
+    updateNumericInput(session, "inflation",     value = 3.1)
+    updateNumericInput(session, "regional",      value = 10)
+
+    withProgress(message = "Running example: loading California...", value = 0.1, {
+      tryCatch({
+        dat <- load_state_data("CA")
+        rv$neighbors <- dat$neighbors
+        rv$sys_geo   <- dat$sys_geo
+        setProgress(0.4, message = "Filtering pairs...")
+
+        cons_cfg <- list(open_health_viol = "No", health_viols_10yr = 1,
+                         owner_type = "All", pop_served = 1000)
+        rec_cfg  <- list(open_health_viol = "No", health_viols_10yr = 1,
+                         owner_type = "All", pop_served = 10000, cutoff = 3)
+        filtered <- filter_pairs(rv$neighbors, cons_cfg, rec_cfg)
+
+        if (nrow(filtered) == 0) {
+          showNotification("Example: no pairs matched — try relaxing filters.", type = "warning")
+          return()
+        }
+
+        rv$filtered <- filtered
+        setProgress(0.7, message = "Calculating costs...")
+
+        rv$costs <- get_costs(
+          filtered,
+          cost_per_mile = 1000000, connection_fee = 4000, service_line_fee = 6200,
+          admin_cost = 0.15, contingency_const = 0.20, planning_constuction_const = 0.10,
+          engineering_services_const = 0.15, inflation_const = 0.031,
+          regional_multiplier_const = 0.10
+        )
+        rv$selected_cons <- unique(rv$costs$pwsid)[1]
+        rv$selected_pair <- NULL
+        setProgress(1)
+        goto_step(3)
+        showNotification(
+          sprintf("Example loaded: %d pairs across %d systems in CA.",
+                  nrow(rv$costs), n_distinct(rv$costs$pwsid)),
+          type = "message", duration = 4
+        )
+      }, error = function(e) {
+        showNotification(paste("Example failed:", e$message), type = "error", duration = 8)
+      })
+    })
+  })
+
   # ── Top-navbar link handlers ──
   scroll_to_section <- function(section_id) {
     shinyjs::runjs(sprintf("
@@ -334,70 +410,103 @@ server <- function(input, output, session) {
   shinyjs::onclick("nav-method", scroll_to_section("landing-methodology_anchor"))
   shinyjs::onclick("nav-launch", updateTabItems(session, "sidebar", "tool"))
 
-  # ── Step 1: Load state ─────────────────────────────────────────────────────
-  observeEvent(input$btn_state, {
-    withProgress(message = sprintf("Loading %s data from S3...", input$state),
-                 detail = "This may take a moment for large states.", value = 0.2, {
-                   tryCatch({
-                     dat <- load_state_data(input$state)
-                     rv$neighbors     <- dat$neighbors
-                     rv$sys_geo       <- dat$sys_geo
-                     rv$filtered      <- NULL
-                     rv$costs         <- NULL
-                     rv$selected_cons <- NULL
-                     rv$selected_pair <- NULL
-                     setProgress(1)
-                     showNotification(
-                       sprintf("Loaded %d candidate pairs for %s.", nrow(dat$neighbors), input$state),
-                       type = "message", duration = 3
-                     )
-                     bbox <- st_bbox(dat$sys_geo)
-                     leafletProxy("map") %>%
-                       clearShapes() %>%
-                       clearControls() %>%
-                       fitBounds(bbox[[1]], bbox[[2]], bbox[[3]], bbox[[4]])
-                   }, error = function(e) {
-                     showNotification(paste("S3 load failed:", e$message), type = "error", duration = 8)
-                   })
-                 })
+  # ── Wizard state ──────────────────────────────────────────────────────────
+  wizard_step <- reactiveVal(1)
+
+  step_titles <- c("Select State", "Define Systems", "Cost Parameters")
+
+  output$wizard_header <- renderUI({
+    s <- wizard_step()
+    div(class = "wizard-header",
+      div(class = "wizard-dots",
+        lapply(1:3, function(i) {
+          cls <- if (i == s) "wizard-dot active" else if (i < s) "wizard-dot done" else "wizard-dot"
+          div(class = cls)
+        })
+      ),
+      div(class = "wizard-title", step_titles[s])
+    )
   })
 
-  # ── Step 2: Filter pairs ───────────────────────────────────────────────────
-  observeEvent(input$btn_define, {
-    req(rv$neighbors)
-    withProgress(message = "Filtering pairs...", {
-      cons_cfg <- list(
-        open_health_viol  = input$cons_open_viol,
-        health_viols_10yr = input$cons_viols,
-        owner_type        = input$cons_owner,
-        pop_served        = input$cons_max_pop
-      )
-      rec_cfg <- list(
-        open_health_viol  = input$rec_open_viol,
-        health_viols_10yr = input$rec_viols,
-        owner_type        = input$rec_owner,
-        pop_served        = input$rec_min_pop,
-        cutoff            = input$cutoff
-      )
+  output$wizard_nav <- renderUI({
+    s <- wizard_step()
+    div(class = "wizard-nav",
+      if (s > 1) actionButton("btn_back", "\u2190 Back",   class = "btn-secondary btn-sm wizard-btn"),
+      if (s < 3) actionButton("btn_next", "Next \u2192",   class = "btn-primary   btn-sm wizard-btn"),
+      if (s == 3) actionButton("btn_run", "Run Analysis",  class = "btn-danger    btn-sm wizard-btn")
+    )
+  })
 
-      filtered <- filter_pairs(rv$neighbors, cons_cfg, rec_cfg)
+  goto_step <- function(s) {
+    shinyjs::hide(paste0("wizard-step-", wizard_step()))
+    shinyjs::show(paste0("wizard-step-", s))
+    wizard_step(s)
+  }
 
-      if (nrow(filtered) == 0) {
-        showNotification("No pairs match — try relaxing filters.", type = "warning")
-        return()
-      }
+  observeEvent(input$btn_back, {
+    goto_step(wizard_step() - 1)
+  })
 
-      rv$filtered      <- filtered
-      rv$costs         <- NULL
-      rv$selected_cons <- NULL
-      rv$selected_pair <- NULL
+  # Next on step 1: load state then advance
+  observeEvent(input$btn_next, {
+    if (wizard_step() == 1) {
+      withProgress(message = sprintf("Loading %s data from S3...", input$state), value = 0.2, {
+        tryCatch({
+          dat <- load_state_data(input$state)
+          rv$neighbors     <- dat$neighbors
+          rv$sys_geo       <- dat$sys_geo
+          rv$filtered      <- NULL
+          rv$costs         <- NULL
+          rv$selected_cons <- NULL
+          rv$selected_pair <- NULL
+          setProgress(1)
+          showNotification(
+            sprintf("Loaded %d candidate pairs for %s.", nrow(dat$neighbors), input$state),
+            type = "message", duration = 3
+          )
+          bbox <- st_bbox(dat$sys_geo)
+          leafletProxy("map") %>%
+            clearShapes() %>% clearControls() %>%
+            fitBounds(bbox[[1]], bbox[[2]], bbox[[3]], bbox[[4]])
+          goto_step(2)
+        }, error = function(e) {
+          showNotification(paste("S3 load failed:", e$message), type = "error", duration = 8)
+        })
+      })
 
-      showNotification(
-        sprintf("%d consolidating | %d receiving systems identified (%d pairs).",
-                n_distinct(filtered$pwsid), n_distinct(filtered$rec_pwsid), nrow(filtered)),
-        type = "message", duration = 4
-      )
-    })
+    } else if (wizard_step() == 2) {
+      req(rv$neighbors)
+      withProgress(message = "Filtering pairs...", {
+        cons_cfg <- list(
+          open_health_viol  = input$cons_open_viol,
+          health_viols_10yr = input$cons_viols,
+          owner_type        = input$cons_owner,
+          pop_served        = input$cons_max_pop
+        )
+        rec_cfg <- list(
+          open_health_viol  = input$rec_open_viol,
+          health_viols_10yr = input$rec_viols,
+          owner_type        = input$rec_owner,
+          pop_served        = input$rec_min_pop,
+          cutoff            = input$cutoff
+        )
+        filtered <- filter_pairs(rv$neighbors, cons_cfg, rec_cfg)
+        if (nrow(filtered) == 0) {
+          showNotification("No pairs match — try relaxing filters.", type = "warning")
+          return()
+        }
+        rv$filtered      <- filtered
+        rv$costs         <- NULL
+        rv$selected_cons <- NULL
+        rv$selected_pair <- NULL
+        showNotification(
+          sprintf("%d joining | %d receiving systems (%d pairs).",
+                  n_distinct(filtered$pwsid), n_distinct(filtered$rec_pwsid), nrow(filtered)),
+          type = "message", duration = 4
+        )
+        goto_step(3)
+      })
+    }
   })
 
   # ── Step 3: Apply costs ────────────────────────────────────────────────────
@@ -409,12 +518,12 @@ server <- function(input, output, session) {
         cost_per_mile              = input$cost_per_mile,
         connection_fee             = input$connection_fee,
         service_line_fee           = input$service_line,
-        admin_cost                 = input$admin_cost,
-        contingency_const          = input$contingency,
-        planning_constuction_const = input$planning,
-        engineering_services_const = input$engineering,
-        inflation_const            = input$inflation,
-        regional_multiplier_const  = input$regional
+        admin_cost                 = input$admin_cost        / 100,
+        contingency_const          = input$contingency       / 100,
+        planning_constuction_const = input$planning          / 100,
+        engineering_services_const = input$engineering       / 100,
+        inflation_const            = input$inflation         / 100,
+        regional_multiplier_const  = input$regional          / 100
       )
       rv$selected_cons <- unique(rv$costs$pwsid)[1]
       rv$selected_pair <- NULL
@@ -603,17 +712,17 @@ server <- function(input, output, session) {
         across(c(rec_centroid_distance, rec_travel_distance), ~round(., 2))
       ) %>%
       rename(
-        "Cons. PWSID"        = pwsid,
-        "Cons. Name"         = pws_name,
-        "Rec. PWSID"         = rec_pwsid,
-        "Rec. Name"          = rec_pws_name,
-        "Centroid Dist (mi)" = rec_centroid_distance,
+        "Joining System ID"        = pwsid,
+        "Joining System Name"         = pws_name,
+        "Receving System ID"         = rec_pwsid,
+        "Receiving System Name"          = rec_pws_name,
+        "Est. Total Cost"         = total_project_cost,
+        "Distance Center to Center (mi)" = rec_centroid_distance,
         "Travel Dist (mi)"   = rec_travel_distance,
-        "Overlap"            = rec_overlap,
-        "Connections"        = service_connections_count,
-        "Capital Costs"      = total_capital_costs,
-        "Markup"             = total_markup,
-        "Total Cost"         = total_project_cost
+        "Do they overlap?"            = rec_overlap,
+        "Number of Service Connections"        = service_connections_count,
+        "Est. Consolidating Capital Costs"      = total_capital_costs,
+        "Est. Markup"             = total_markup
       ) %>%
       datatable(selection = "single", rownames = FALSE,
                 options = list(pageLength = 8, scrollX = TRUE, dom = "tip"))
@@ -719,19 +828,19 @@ server <- function(input, output, session) {
       )
     })
 
-    agg <- div(
-      style = "background:#eaf2ff; border:1px solid #aed6f1; border-radius:4px;
-                padding:10px; margin-top:4px;",
-      tags$b("Aggregate across all pairs"), br(),
-      fluidRow(
-        column(3, "Min:",    tags$b(dollar(min(pairs$total_project_cost)))),
-        column(3, "Median:", tags$b(dollar(median(pairs$total_project_cost)))),
-        column(3, "Mean:",   tags$b(dollar(mean(pairs$total_project_cost)))),
-        column(3, "Total:",  tags$b(dollar(sum(pairs$total_project_cost))))
-      )
-    )
+    # agg <- div(
+    #   style = "background:#eaf2ff; border:1px solid #aed6f1; border-radius:4px;
+    #             padding:10px; margin-top:4px;",
+    #   tags$b("Aggregate across all pairs"), br(),
+    #   fluidRow(
+    #     column(3, "Min:",    tags$b(dollar(min(pairs$total_project_cost)))),
+    #     column(3, "Median:", tags$b(dollar(median(pairs$total_project_cost)))),
+    #     column(3, "Mean:",   tags$b(dollar(mean(pairs$total_project_cost)))),
+    #     column(3, "Total:",  tags$b(dollar(sum(pairs$total_project_cost))))
+    #   )
+    # )
 
-    tagList(header, br(), rows, agg)
+    tagList(header, br(), rows)
   })
 }
 

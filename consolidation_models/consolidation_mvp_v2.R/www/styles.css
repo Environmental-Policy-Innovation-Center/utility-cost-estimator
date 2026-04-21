@@ -206,15 +206,90 @@ label {
   padding: 16px;
 }
 
-/* Preserve the compact sidebar styling from v2 */
-.tool-content body { font-size: 13px; }
-.sidebar-section {
-  background: #f8f9fa;
-  border-radius: 6px;
-  padding: 10px 12px;
-  margin-bottom: 10px;
+/* ── Run Example sticky banner ── */
+.example-sticky {
+  position: sticky;
+  top: 80px;
+  z-index: 200;
+  background: #fff;
+  border-radius: 8px;
+  border: 1.5px solid #0e8a7d;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  box-shadow: 0 2px 8px rgba(14,138,125,0.12);
+  text-align: center;
 }
-.sidebar-section h5 { margin-top: 0; font-weight: 600; color: #333; }
+.btn-example-run {
+  width: 100%;
+  background: #0e8a7d !important;
+  border-color: #0e8a7d !important;
+  color: #fff !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  border-radius: 6px !important;
+  padding: 7px 12px !important;
+  transition: background 0.2s, transform 0.15s;
+}
+.btn-example-run:hover {
+  background: #0c7a6f !important;
+  border-color: #0c7a6f !important;
+  transform: translateY(-1px);
+}
+.example-sub {
+  font-size: 11px;
+  color: #6c757d;
+  margin-top: 4px;
+}
+
+/* ── Wizard header ── */
+.wizard-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 2px 10px;
+  border-bottom: 1px solid #e9ecef;
+  margin-bottom: 12px;
+}
+.wizard-dots {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.wizard-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #dee2e6;
+  transition: background 0.2s;
+}
+.wizard-dot.active {
+  background: #1a5276;
+  width: 20px;
+  border-radius: 4px;
+}
+.wizard-dot.done {
+  background: #0e8a7d;
+}
+.wizard-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1a5276;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Wizard nav buttons ── */
+.wizard-nav {
+  display: flex;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #e9ecef;
+}
+.wizard-btn {
+  flex: 1;
+}
+
+/* Preserve compact filter row styling */
 .step-badge {
   display: inline-block;
   background: #1a5276;

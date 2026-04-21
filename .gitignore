@@ -19,3 +19,5 @@ wbs_models/modules/WBSCompSelect.R
 wbs_models/resources/importing.R
 wbs_models/modules/WBSCompSelect.R
 wbs_models/gac_app/rsconnect/shinyapps.io/epic-tech/gac_app.dcf
+consolidation_modeles/.RData
+.Rproj.user

@@ -774,7 +774,7 @@ server <- function(input, output, session) {
         "Est. Consolidating Capital Costs"      = total_capital_costs,
         "Est. Markup"             = total_markup
       ) %>%
-      datatable(selection = list(mode = "single", selected = 1), rownames = FALSE,
+      datatable(selection = "single", rownames = FALSE,
                 options = list(pageLength = 8, scrollX = TRUE, dom = "tip"))
   })
 
@@ -842,7 +842,8 @@ server <- function(input, output, session) {
       select(rec_pws_name, all_of(cost_cols)) %>%
       pivot_longer(-rec_pws_name, names_to = "component", values_to = "cost") %>%
       mutate(
-        component    = factor(component_labels[component], levels = component_labels),
+        component    = dplyr::recode(component, !!!component_labels),
+        component    = factor(component, levels = unname(component_labels)),
         rec_pws_name = stringr::str_wrap(rec_pws_name, 20)
       )
 
@@ -857,7 +858,7 @@ server <- function(input, output, session) {
     ) +
       geom_col(position = position_dodge(width = 0.75), width = 0.7) +
       scale_y_continuous(
-        labels = scales::label_dollar(scale_cut = scales::cut_short_scale()),
+        labels = scales::dollar,
         expand = expansion(mult = c(0, 0.06))
       ) +
       scale_fill_brewer(palette = "Blues", direction = 1) +

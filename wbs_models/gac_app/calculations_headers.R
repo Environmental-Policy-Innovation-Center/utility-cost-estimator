@@ -835,25 +835,26 @@ calculate_gac_requirements <- function(
 
   # ── Annual replacement cost ───────────────────────────────────────────────────
   # Workbook OUTPUT E376: replace_gac_eq  (CE row 196)
-  #   J*exp(K*D),  D=MIN(GAC_makeup_cf, 40000),  J=2.101628083, K=-5.637e-06  ($/cf)
+  #   J*exp(K*D),  D=MIN(GAC_makeup_lbs, 40000),  J=2.101628083, K=-5.637e-06  ($/lb)
   # Workbook OUTPUT E377: off_regen_eq    (CE row 197)
-  #   J*exp(K*D),  D=MIN(regen_yr_cf, 40000),    J=1.991910116, K=-1.3224e-05 ($/cf)
-  # annual cost = GAC_makeup_cf * replace_gac_uc + regen_yr_cf * off_regen_uc
+  #   J*exp(K*D),  D=MIN(regen_yr_lbs, 40000),    J=1.991910116, K=-1.3224e-05 ($/lb)
+  # annual cost = GAC_makeup_lbs * replace_gac_uc + regen_yr_lbs * off_regen_uc
 
-  replace_gac_D  <- min(GAC_makeup_cf, 40000)
-  replace_gac_uc <- if (replace_gac_D == 0) 0 else
-    2.101628083 * exp(-5.637e-06 * replace_gac_D)
-
-  off_regen_D    <- min(regen_yr_cf, 40000)
-  off_regen_uc   <- if (off_regen_D == 0 || regen_code %in% c(1L, 3L, 5L, 6L, 7L)) 0 else
-    1.991910116 * exp(-1.3224e-05 * off_regen_D)
-
-  annual_replacement_cost <- GAC_makeup_cf * replace_gac_uc + regen_yr_cf * off_regen_uc
-
-  # Convert cf → lbs for O&M display (workbook OUTPUT col C uses lbs)
+  # Convert cf → lbs FIRST — D argument uses lbs (confirmed from workbook TC-01:
+  #   303 lbs × $2.10/lb = $636; D=303 lbs gives 2.101628*exp(-5.637e-6*303)=$2.098/lb ✓)
   GAC_density_lb_cf <- GAC_density  # lbs/cf passed in
   GAC_makeup_lbs    <- GAC_makeup_cf * GAC_density_lb_cf
   regen_yr_lbs      <- regen_yr_cf  * GAC_density_lb_cf
+
+  replace_gac_D  <- min(GAC_makeup_lbs, 40000)
+  replace_gac_uc <- if (replace_gac_D == 0) 0 else
+    2.101628083 * exp(-5.637e-06 * replace_gac_D)   # $/lb
+
+  off_regen_D    <- min(regen_yr_lbs, 40000)
+  off_regen_uc   <- if (off_regen_D == 0 || regen_code %in% c(1L, 3L, 5L, 6L, 7L)) 0 else
+    1.991910116 * exp(-1.3224e-05 * off_regen_D)    # $/lb
+
+  annual_replacement_cost <- GAC_makeup_lbs * replace_gac_uc + regen_yr_lbs * off_regen_uc
 
   list(
     total_gac_mass_lb       = total_gac_mass_lb,
@@ -865,8 +866,11 @@ calculate_gac_requirements <- function(
     regen_yr_cf             = regen_yr_cf,
     GAC_makeup_lbs          = GAC_makeup_lbs,
     regen_yr_lbs            = regen_yr_lbs,
-    replace_gac_uc          = replace_gac_uc,   # $/lb — for O&M display
-    off_regen_uc            = off_regen_uc,     # $/lb — for O&M display
+    replace_gac_uc          = replace_gac_uc,   # $/lb (CE row 196) — multiply by GAC_makeup_lbs
+    off_regen_uc            = off_regen_uc,     # $/lb (CE row 197) — multiply by regen_yr_lbs
+    # disposal_freq: replacement cycles per year = 12 / bed_life_months
+    # Used in calculate_om_costs for operator labor (O&M rows 19-20 media changes)
+    disposal_freq           = if (bed_life_months > 0) 12 / bed_life_months else 0,
     regen_capacity          = 0,  # on-site regeneration capacity (furnace) — not computed here
     annual_replacement_cost = annual_replacement_cost
   )
@@ -1028,12 +1032,33 @@ calculate_pumps <- function(
 
   total_cost <- booster_cost + back_cost + res_cost
 
-  message(sprintf("5.1 Booster:   %d x %.0f gpm = $%.0f ea -> $%.0f",
-                  total_booster_pumps, pump_rating, booster_uc, booster_cost))
-  message(sprintf("5.2 Backwash:  %d x %.0f gpm = $%.0f ea -> $%.0f",
-                  n_back_pumps, back_pump_rating, back_uc, back_cost))
-  message(sprintf("5.3 Residuals: %d x %.0f gpm = $%.0f ea -> $%.0f",
-                  n_res_pumps, res_pump_rating, res_uc, res_cost))
+  # ── O&M energy: pump HP and annual MWh ────────────────────────────────────
+  # Workbook O&M C26–C55: pump_hp = Q × head / (3960 × eff)
+  # CDA C55 pump_head (ft), CDA C56 pump_eff (fraction).
+  # Booster pumps run continuously (8760 hr/yr); backwash/residuals hours are
+  # computed in calculate_om_costs from vessel count and backwash interval.
+  pump_head_ft <- get_assumption(critical_assumptions, "pump_head", 50)   # CDA C55  [GA]
+  pump_eff     <- get_assumption(critical_assumptions, "pump_eff",  0.75) # CDA C56  [GA]
+  pump_head_ft <- safe_as_numeric(pump_head_ft, 50)
+  pump_eff     <- safe_as_numeric(pump_eff,     0.75)
+  hp_factor    <- pump_head_ft / (3960 * pump_eff)  # hp per gpm
+
+  # Booster pump: total_booster_pumps × each pump's HP × continuous operation
+  booster_hp       <- total_booster_pumps * pump_rating * hp_factor
+  pump_energy_mwh  <- booster_hp * 0.7457 / 1000 * 8760  # MWh/yr (24/7/365)
+
+  # Backwash pump: single operating pump HP (O&M multiplies by backwash hrs/yr)
+  back_pump_hp     <- back_pump_rating * hp_factor
+
+  # Residuals pump: single operating pump HP (O&M multiplies by backwash hrs/yr)
+  res_pump_hp      <- res_pump_rating * hp_factor
+
+  message(sprintf("5.1 Booster:   %d x %.0f gpm = $%.0f ea -> $%.0f  (%.2f hp, %.2f MWh/yr)",
+                  total_booster_pumps, pump_rating, booster_uc, booster_cost, booster_hp, pump_energy_mwh))
+  message(sprintf("5.2 Backwash:  %d x %.0f gpm = $%.0f ea -> $%.0f  (%.2f hp/pump)",
+                  n_back_pumps, back_pump_rating, back_uc, back_cost, back_pump_hp))
+  message(sprintf("5.3 Residuals: %d x %.0f gpm = $%.0f ea -> $%.0f  (%.2f hp/pump)",
+                  n_res_pumps, res_pump_rating, res_uc, res_cost, res_pump_hp))
 
   list(
     service_pumps     = total_booster_pumps,
@@ -1046,6 +1071,10 @@ calculate_pumps <- function(
     service_cost      = booster_cost,
     backwash_cost     = back_cost,
     residuals_cost    = res_cost,
+    # O&M energy fields (rows 381-383)
+    pump_energy_mwh   = pump_energy_mwh,   # booster: MWh/yr (continuous)
+    back_pump_hp      = back_pump_hp,      # backwash: HP per operating pump
+    res_pump_hp       = res_pump_hp,       # residuals: HP per operating pump
     # Aliases used by calculate_om_costs for maintenance materials (O&M rows 369-371)
     booster_pump_tc   = booster_cost,
     backwash_pump_tc  = back_cost,
@@ -3079,8 +3108,8 @@ compile_capital_costs <- function(contactors, gac, pumps, tanks, piping, control
 #'   O&M  C26–C55   energy: booster pump hp, backwash energy, lighting, ventilation
 #'   O&M  C56–C80   GAC makeup and regeneration quantities and costs
 #'                  GAC_yr_lb = total_gac_mass_lb / (bed_life_months / 12)   (operating only)
-#'                  makeup_gac_cost = makeup_lbs × replace_gac_uc
-#'                  off_regen_cost  = regen_lbs  × off_regen_uc
+#'                  makeup_gac_cost = GAC_makeup_lbs × replace_gac_uc  ($/lb, CE row 196)
+#'                  off_regen_cost  = regen_yr_lbs  × off_regen_uc    ($/lb, CE row 197)
 #'   O&M  C81–C110  materials: pump maintenance, filter media, building/HVAC
 #'                  bldg_maint = building_fp_sf × building_matl_rate_cl ($/sf/yr)
 #'   IA   C85–C86   permit costs (POTW pretreatment or NPDES)
@@ -3346,14 +3375,16 @@ calculate_om_costs <- function(
   bldg_maint_cost <- if (include_buildings) building_matl_rate_cl * total_fp else 0
 
   # ── GAC media costs (OUTPUT rows 376-377) ─────────────────────────────────
-  # These come directly from gac_results (already computed via workbook CE equations)
-  GAC_makeup_lbs    <- safe_n(gac_results$GAC_makeup_lbs, GAC_makeup_cf * 30)
-  replace_gac_uc    <- safe_n(gac_results$replace_gac_uc, 0)
-  makeup_gac_cost   <- GAC_makeup_lbs * replace_gac_uc
+  # replace_gac_uc / off_regen_uc are $/lb (CE rows 196-197, D=lbs).
+  # Multiply by lbs quantities (workbook: 303 lbs × $2.10/lb = $636 for TC-01).
+  replace_gac_uc    <- safe_n(gac_results$replace_gac_uc, 0)   # $/lb
+  GAC_makeup_lbs    <- safe_n(gac_results$GAC_makeup_lbs, 0)
+  makeup_gac_cost   <- GAC_makeup_lbs * replace_gac_uc          # lbs × $/lb = $
 
+  regen_yr_cf       <- safe_n(gac_results$regen_yr_cf, 0)
   regen_yr_lbs      <- safe_n(gac_results$regen_yr_lbs, 0)
-  off_regen_uc      <- safe_n(gac_results$off_regen_uc, 0)
-  off_regen_cost    <- regen_yr_lbs * off_regen_uc
+  off_regen_uc      <- safe_n(gac_results$off_regen_uc, 0)      # $/lb
+  off_regen_cost    <- regen_yr_lbs * off_regen_uc               # lbs × $/lb = $
 
   # ── Energy (OUTPUT rows 381-387) ─────────────────────────────────────────────
   energy_cost_cl <- 0.11001750924784216  # $/kWh (Cost Data row 1277)
@@ -3369,8 +3400,10 @@ calculate_om_costs <- function(
   back_pump_energy_mwh <- back_pump_hp * 0.7457/1000 * back_hrs_yr
   back_pump_energy_cost <- if (back_pump_energy_mwh > 0) back_pump_energy_mwh * energy_cost_cl * 1000 else 0
 
-  # Row 383: residuals pump energy
-  res_pump_energy_mwh <- safe_n(pump_results$res_pump_energy_mwh, 0)
+  # Row 383: residuals pump energy — same operating hours pattern as backwash
+  # Residuals pumps run once per backwash event for the same backwash duration.
+  res_pump_hp_val      <- safe_n(pump_results$res_pump_hp, 0)
+  res_pump_energy_mwh  <- res_pump_hp_val * 0.7457 / 1000 * back_hrs_yr
   res_pump_energy_cost <- if (res_pump_energy_mwh > 0) res_pump_energy_mwh * energy_cost_cl * 1000 else 0
 
   # Row 386: Lighting
@@ -3417,8 +3450,21 @@ calculate_om_costs <- function(
     else if (grepl("evap", d)) 5L
     else 2L
   }
-  res_flow_annual_gal <- safe_n(tank_results$res_flow_annual_gal, 0)
-  # Row 399: POTW discharge fee = POTW_fee
+  # Row 399: POTW discharge fee
+  # Workbook: annual backwash water = water_flush_gpm × backwash_time_min × events_per_yr_per_vessel
+  #   where water_flush = ROUND(12 gpm/ft² × vessel_SA, 0)
+  #   and events_per_yr_per_vessel = 365 × 24 / backwash_interval_hrs
+  # (Each vessel backwashes independently; staggered scheduling means 1 vessel at a time)
+  vessel_diam_om <- safe_n(contactor_results$diameter, 0)
+  water_flush_om <- if (vessel_diam_om > 0)
+    round(12 * pi * (vessel_diam_om / 2)^2, 0)
+  else
+    safe_n(tank_results$res_flow_annual_gal, 0) / backwash_time / (365 * 24 / backwash_interval)
+  events_per_yr_om  <- 365 * 24 / backwash_interval  # per vessel
+  res_flow_annual_gal <- if (vessel_diam_om > 0)
+    water_flush_om * backwash_time * events_per_yr_om
+  else
+    safe_n(tank_results$res_flow_annual_gal, 0)
   # POTW_fee = base_cost_avg/month × 12 + vol_cost_avg/1000gal × res_flow_annual_gal/1000
   # Workbook uses "average" rates (Cost Data rows 1548, 1560)
   potw_base_monthly <- 17.200849956393093  # $/month (average)
@@ -3452,7 +3498,7 @@ calculate_om_costs <- function(
   misc_allowance <- misc_pct * subtotal_before_misc
 
   # ── Total (OUTPUT row 404) ────────────────────────────────────────────────────
-  total_annual <- (subtotal_before_misc + misc_allowance)
+  total_annual <- round(subtotal_before_misc + misc_allowance)
 
   message("O&M cost breakdown (workbook-aligned):")
   message(sprintf("  Labor — Manager:   $%.2f (%.2f hrs × $%.2f/hr)", labor_manager, Manager_LOE, mgr_uc))
@@ -5098,34 +5144,43 @@ calculate_gac_system <- function(params) {
         ceiling((d_m+2*sp_m)^2 + (n_m-1)*(d_m+2*sp_m)*(d_m+sp_m/2))
       else
         ceiling((d_m+2*sp_m)^2 + (n_m-1)*(d_m+2*sp_m)*(d_m+sp_m))
-      # ── WBS 14.1.1 fix: always compute full footprint (vessel + backwash tank +
-      #    pumps + office), not just vessel footprint for small systems.
-      #    n_e_m table already handles design_flow_mgd <= 0.124 → 1.0 office FTE.
-      wf_m    <- round(12 * pi * (d_m/2)^2, 0)
-      bv_m    <- wf_m * 10 / 7.48
-      # Workbook bt_diam: ROUNDUP(2*MAX((2*bt_cf/PI())^(1/3), (4*bt_cf/PI()/(14-2))^0.5), 0)
-      bt_d_m  <- ceiling(2 * max((2*bv_m/pi)^(1/3), sqrt(4*bv_m/pi/12)))
-      sp_bt_m <- min(bt_d_m, 6)
-      bt_fp_m <- ceiling((bt_d_m + 2*sp_bt_m)^2)
-      # pump_fp: actual booster + backwash pump footprints (pump_dim_table_cl, space_pumps_cust=4ft)
-      sp_p_m <- 4
-      booster_gpm_m <- min(design_flow_mgd * 1e6 / 1440 * 1.25, 35000)
-      pump_l_m <- if (booster_gpm_m <= 350) 2.5 else if (booster_gpm_m <= 1740) 3.75 else if (booster_gpm_m <= 7000) 5 else 7.083
-      boost_fp_m <- ceiling((pump_l_m+sp_p_m)*(pump_l_m+2*sp_p_m))
-      bpft_m   <- wf_m * 1.25
-      n_bop_m  <- max(1L, ceiling(bpft_m / 10000))
-      n_btot_m <- n_bop_m + 1L
-      bpr_m    <- bpft_m / n_bop_m
-      bpl_m    <- if (bpr_m <= 350) 2.5 else if (bpr_m <= 1740) 3.75 else if (bpr_m <= 7000) 5 else 7.083
-      back_pump_fp_m <- ceiling((bpl_m+sp_p_m)*(bpl_m+2*sp_p_m) + (n_btot_m-1)*(bpl_m+2*sp_p_m)*(bpl_m+sp_p_m))
-      pump_fp_m <- boost_fp_m + back_pump_fp_m
-      n_e_m   <- if      (design_flow_mgd <= 0.124)  1.0
-                 else if (design_flow_mgd <= 0.74)   1.2
-                 else if (design_flow_mgd <= 2.152)  1.6
-                 else if (design_flow_mgd <= 7.365)  2.8
-                 else if (design_flow_mgd <= 22.614) 3.8
-                 else 7.8
-      fp_req_m <- vfp_m + bt_fp_m + pump_fp_m + n_e_m * 100
+      # ── WBS 14.1.1: backwash pump footprint (shared by small and large paths)
+      wf_m    <- round(12 * pi * (d_m/2)^2, 0)  # backwash flow gpm = 12 gpm/ft² × vessel SA
+      sp_p_m  <- 4  # space_pumps_cust = 4 ft (CDA)
+      bpft_m  <- wf_m * 1.25                     # backwash pump rated flow (gpm)
+      n_bop_m <- max(1L, ceiling(bpft_m / 10000))
+      n_btot_m <- n_bop_m + 1L                   # operating + 1 redundant (NRD_back_pumps=1)
+      bpr_m   <- bpft_m / n_bop_m
+      bpl_m   <- if (bpr_m <= 350) 2.5 else if (bpr_m <= 1740) 3.75 else if (bpr_m <= 7000) 5 else 7.083
+      back_pump_fp_m <- ceiling((bpl_m+sp_p_m)*(bpl_m+2*sp_p_m) +
+                                (n_btot_m-1)*(bpl_m+2*sp_p_m)*(bpl_m+sp_p_m))
+
+      if (design_flow_mgd < 1) {
+        # ── Small systems (< 1 MGD): vessel fp + backwash pump fp if new pumps;
+        #    no backwash tank (ss_cat2=1 uses existing infrastructure),
+        #    no booster (same), no office (workbook n_e_m×100 = 0 for small).
+        no_bw_str_fp <- tolower(trimws(as.character(params$no_backwash %||% "")))
+        back_pump_included_fp <- (no_bw_str_fp != "existing pumps")
+        fp_req_m <- vfp_m + (if (back_pump_included_fp) back_pump_fp_m else 0)
+      } else {
+        # ── Large systems: full formula (vessel + backwash tank + pumps + office)
+        bv_m    <- wf_m * 10 / 7.48
+        # Workbook bt_diam: ROUNDUP(2*MAX((2*bt_cf/PI())^(1/3), (4*bt_cf/PI()/(14-2))^0.5), 0)
+        bt_d_m  <- ceiling(2 * max((2*bv_m/pi)^(1/3), sqrt(4*bv_m/pi/12)))
+        sp_bt_m <- min(bt_d_m, 6)
+        bt_fp_m <- ceiling((bt_d_m + 2*sp_bt_m)^2)
+        # Booster pump footprint
+        booster_gpm_m <- min(design_flow_mgd * 1e6 / 1440 * 1.25, 35000)
+        pump_l_m <- if (booster_gpm_m <= 350) 2.5 else if (booster_gpm_m <= 1740) 3.75 else if (booster_gpm_m <= 7000) 5 else 7.083
+        boost_fp_m <- ceiling((pump_l_m+sp_p_m)*(pump_l_m+2*sp_p_m))
+        pump_fp_m <- boost_fp_m + back_pump_fp_m
+        n_e_m   <- if      (design_flow_mgd <= 0.74)   1.2
+                   else if (design_flow_mgd <= 2.152)  1.6
+                   else if (design_flow_mgd <= 7.365)  2.8
+                   else if (design_flow_mgd <= 22.614) 3.8
+                   else 7.8
+        fp_req_m <- vfp_m + bt_fp_m + pump_fp_m + n_e_m * 100
+      }
       if (fp_req_m >= 10000) vfp_m else fp_req_m
     }
   )

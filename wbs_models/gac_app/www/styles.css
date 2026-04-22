@@ -299,6 +299,13 @@ label {
   padding: 0;
 }
 
+/* ── Technology header ── */
+.technology-header {
+  margin-left: 20px;
+  color: #0a2540;
+  font-weight: bold;
+}
+
 /* ── Contaminant header ── */
 .target-contaminant-header {
   margin-left: 20px;

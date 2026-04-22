@@ -13,6 +13,10 @@ div(id = "loading-overlay",
     p("Please wait while we process your request")
   )
 ), 
+  tags$div(
+          class = "technology-header",
+          h1("Technology: Granular Activated Carbon (GAC)")
+      ),
     column(
       width = 8,
 

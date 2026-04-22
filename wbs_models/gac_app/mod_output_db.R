@@ -271,16 +271,20 @@ outputDbServer <- function(id, results) {
     
 
     output$contaminant_title <- renderUI({
-      
-      params    <- output_db()$inputs
+
+      params <- output_db()$inputs
+
+      is_other <- isTRUE(tolower(trimws(as.character(params$contaminant %||% ""))) == "other")
+      custom_name <- trimws(as.character(params$cont_name %||% ""))
+      display_name <- if (is_other && nchar(custom_name) > 0)
+        paste0("Other — ", custom_name)
+      else
+        as.character(params$contaminant %||% "")
 
       tags$div(
-          class = "target-contaminant-header",
-          h2(paste0("Target Contaminant: ", params$contaminant))
+        class = "target-contaminant-header",
+        h2(paste0("Target Contaminant: ", display_name))
       )
-
-      
-      #browser()
     })
 
     # Helper function to build output_db structure from calculation results

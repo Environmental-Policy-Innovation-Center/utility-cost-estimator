@@ -307,11 +307,11 @@ outputDbServer <- function(id, results) {
       req(output_db())
       
       value <- if (!is.null(output_db()$capital_costs$total_direct)) {
-        scales::dollar(output_db()$capital_costs$total_direct)
+        scales::dollar(output_db()$capital_costs$total_direct, accuracy = 1)
       } else {
         "N/A"
       }
-      
+
       valueBox(
         value = value,
         subtitle = "Total Direct Capital Cost",
@@ -319,16 +319,16 @@ outputDbServer <- function(id, results) {
         color = "teal"
       )
     })
-    
+
     output$total_indirect_summary <- renderValueBox({
       req(output_db())
-      
+
       value <- if (!is.null(output_db()$capital_costs$total_indirect)) {
-        scales::dollar(output_db()$capital_costs$total_indirect)
+        scales::dollar(output_db()$capital_costs$total_indirect, accuracy = 1)
       } else {
         "N/A"
       }
-      
+
       valueBox(
         value = value,
         subtitle = "Total Indirect Cost",
@@ -336,17 +336,17 @@ outputDbServer <- function(id, results) {
         color = "teal"
       )
     })
-    
+
 
     output$total_add_on <- renderValueBox({
       req(output_db())
-      
+
       value <- if (!is.null(output_db()$capital_costs$addon_cost)) {
-        scales::dollar(output_db()$capital_costs$addon_cost)
+        scales::dollar(output_db()$capital_costs$addon_cost, accuracy = 1)
       } else {
         "N/A"
       }
-      
+
       valueBox(
         value = value,
         subtitle = "Add-on Cost",
@@ -357,13 +357,13 @@ outputDbServer <- function(id, results) {
 
     output$total_project_summary <- renderValueBox({
       req(output_db())
-      
+
       value <- if (!is.null(output_db()$capital_costs$total_project)) {
-        scales::dollar(output_db()$capital_costs$total_project)
+        scales::dollar(output_db()$capital_costs$total_project, accuracy = 1)
       } else {
         "N/A"
       }
-      
+
       valueBox(
         value = value,
         subtitle = "Grand Total Capital Cost",
@@ -371,12 +371,12 @@ outputDbServer <- function(id, results) {
         color = "green"
       )
     })
-    
+
     output$annualized_om_summary <- renderValueBox({
       req(output_db())
-      
+
       value <- if (!is.null(output_db()$om_costs$total_annual)) {
-        scales::dollar(output_db()$om_costs$total_annual)
+        scales::dollar(output_db()$om_costs$total_annual, accuracy = 1)
       } else {
         "N/A"
       }

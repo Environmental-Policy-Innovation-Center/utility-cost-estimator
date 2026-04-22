@@ -890,6 +890,7 @@ calculate_gac_requirements <- function(
 #'   CDA  C51       pump_safety_factor = 0.25
 #'   CDA  C52       NRD_pumps = 0  (booster redundancy)
 #'   CDA  C53       NRD_back_pumps = 1  (backwash redundancy)
+#'   CDA  C54       NRD_res_pump = 1  (residuals redundancy)
 #'
 #' System size determines pump inclusion (ss_cat2):
 #'   ss_cat2 = 1 (< 1 MGD)  → no booster or backwash pumps (existing infrastructure)
@@ -931,7 +932,7 @@ calculate_pumps <- function(
                     res_holding        = "none",  # "none" = no residuals holding
                     NRD_pumps          = 0,       # redundant booster pumps, CDA C52  [GA] get_assumption(critical_assumptions, "NRD_pumps", 0)
                     NRD_back_pumps     = get_assumption(critical_assumptions, "NRD_back_pumps", 1),       # CDA C53  [GA] 
-                    NRD_res_pump       = 0,       # redundant residuals pumps
+                    NRD_res_pump       = get_assumption(critical_assumptions, "NRD_res_pump", 1),  # CDA C54  [GA]
                     pump_safety_factor = get_assumption(critical_assumptions, "pump_safety_factor", 0.25),    # CDA C51  [GA] 
                     max_pump_size      = 10000) { # gpm, PPS C8
 
@@ -952,16 +953,26 @@ calculate_pumps <- function(
   res_flow_gpm       <- safe_as_numeric(res_flow_gpm,       0)
   NRD_pumps          <- safe_as_numeric(NRD_pumps,          0)     # [GA] default: get_assumption(critical_assumptions, "NRD_pumps", 0)
   NRD_back_pumps     <- safe_as_numeric(NRD_back_pumps,     1)     # [GA] default: get_assumption(critical_assumptions, "NRD_back_pumps", 1)
-  NRD_res_pump       <- safe_as_numeric(NRD_res_pump,       0)
+  NRD_res_pump       <- safe_as_numeric(NRD_res_pump,       1)     # [GA] default: get_assumption(critical_assumptions, "NRD_res_pump", 1)
   pump_safety_factor <- safe_as_numeric(pump_safety_factor, 0.25)  # [GA] default: get_assumption(critical_assumptions, "pump_safety_factor", 0.25)
   max_pump_size      <- safe_as_numeric(max_pump_size,      10000)
 
   # B&R C9: no_backwash = IF(no_backwash_I="existing pumps", 1,
   #                          IF(no_backwash_I="new pumps",    "",
   #                          IF(ss_cat2=1,                   1, "")))
-  # Default: ss_cat2=1 → no_backwash=1
-  no_backwash_val <- safe_as_numeric(no_backwash, 0)
-  if (no_backwash_val == 0 && ss_cat2 == 1) no_backwash_val <- 1
+  # "existing pumps" → 1  (use existing supply, no new pumps costed in WBS 5.2)
+  # "new pumps"      → 0  (install dedicated backwash pumps, cost them in WBS 5.2)
+  # blank/numeric, ss_cat2=1 → 1  (small-system default: use existing)
+  # blank/numeric, ss_cat2≠1 → 0  (medium/large: install new)
+  no_bw_str <- if (is.character(no_backwash)) tolower(trimws(no_backwash)) else ""
+  no_backwash_val <- if (no_bw_str == "existing pumps") {
+    1L
+  } else if (no_bw_str == "new pumps") {
+    0L
+  } else {
+    nv <- suppressWarnings(as.integer(no_backwash))
+    if (!is.na(nv) && nv == 1L) 1L else if (ss_cat2 == 1) 1L else 0L
+  }
 
   design_flow_gpm <- design_flow * 1e6 / (24 * 60)  # MGD -> gpm
 
@@ -1090,18 +1101,30 @@ calculate_tanks <- function(design_flow, no_backwash, no_backwash_tank,
   num_contactors <- safe_as_numeric(num_contactors, 1)
   backwash_interval <- safe_as_numeric(backwash_interval, 168)  # hours
   
+  # Capture original intent string before coercion — needed for the ss_cat2 override guard.
+  # "new pumps" is an explicit instruction to install backwash pumps even on small systems;
+  # "existing pumps" means use existing supply (equivalent to no_backwash=TRUE).
+  no_backwash_orig_str <- if (is.character(no_backwash)) tolower(trimws(no_backwash)) else ""
+
   # Handle logical/boolean parameters
-  no_backwash <- safe_as_logical(no_backwash, FALSE)
+  no_backwash <- if (no_backwash_orig_str == "new pumps") {
+    FALSE                               # install new pumps → backwash system present
+  } else if (no_backwash_orig_str == "existing pumps") {
+    TRUE                                # use existing supply → no new pumps
+  } else {
+    safe_as_logical(no_backwash, FALSE)
+  }
   no_backwash_tank <- safe_as_logical(no_backwash_tank, FALSE)
   residuals_tank <- safe_as_char(residuals_tank, "no holding tank")
-  
+
   # IMPORTANT: For small systems (< 0.5 MGD), Excel defaults to no backwash
   # Workbook B&R C9 (no_backwash) and C10 (no_back_tank):
   # Default = 1 (use existing pumps/storage) when ss_cat2=1 (design_flow < 1 MGD).
   # For medium/large systems the workbook leaves these blank (user-controlled).
-  # We map ss_cat2=1 → no_backwash/no_backwash_tank = TRUE as the workbook default.
+  # We map ss_cat2=1 → no_backwash/no_backwash_tank = TRUE as the workbook default,
+  # UNLESS the caller explicitly requested "new pumps" — that intent must be honoured.
   ss_cat2_tanks <- if (design_flow < 1) 1L else if (design_flow <= 10) 2L else 3L
-  if (ss_cat2_tanks == 1L && !isTRUE(no_backwash)) {
+  if (ss_cat2_tanks == 1L && !isTRUE(no_backwash) && no_backwash_orig_str != "new pumps") {
     no_backwash      <- TRUE
     no_backwash_tank <- TRUE
     message("Small system (<1 MGD): defaulting no_backwash=TRUE per workbook B&R C9/C10")
@@ -3766,7 +3789,8 @@ calculate_gac_system <- function(params) {
           p$service_pumps      <- as.numeric(get_value(p$service_pumps,      0))
           p$backwash_pumps     <- as.numeric(get_value(p$backwash_pumps,     0))
           p$residuals_pumps    <- as.numeric(get_value(p$residuals_pumps,    0))
-          p$no_backwash        <- as.numeric(get_value(p$no_backwash,        0))
+          # no_backwash may be "new pumps" / "existing pumps" — preserve string intent
+          p$no_backwash        <- get_value(p$no_backwash, 0)
           p$no_backwash_tank   <- get_value(p$no_backwash_tank,   FALSE)
           p$backwash_interval  <- as.numeric(get_value(p$backwash_interval,  168))
           p$residuals_disposal <- get_value(p$residuals_disposal, "POTW")
@@ -3838,12 +3862,22 @@ calculate_gac_system <- function(params) {
           )
 
           # pumps
+          {
+            wfgpm_c <- round(12 * lw_try * lw_try, 0)
+            res_ts_c <- tolower(trimws(as.character(p$residuals_tank %||% "no holding tank")))
+            res_hv_c <- if (grepl("holding tank", res_ts_c) && !grepl("^no", res_ts_c)) "tanks" else "none"
+            res_fg_c <- if (res_hv_c == "none") wfgpm_c else {
+              bih_c <- safe_as_numeric(p$backwash_interval %||% 168, 168)
+              rst_c <- bih_c * 60 / max(1L, con_r$total_contactors)
+              2 * (wfgpm_c * 10) / rst_c
+            }
+          }
           pmp_r <- calculate_pumps(
             design_flow = design_flow_mgd, num_trains = as.integer(n_try),
             service_pumps = p$service_pumps, backwash_pumps = p$backwash_pumps,
             residuals_pumps = p$residuals_pumps, tank_geometry = p$tank_geometry,
             no_backwash = p$no_backwash, ss_cat2 = p$ss_cat2 %||% ss_cat2_c,
-            water_flush_gpm = round(12 * lw_try * lw_try, 0)
+            water_flush_gpm = wfgpm_c, res_holding = res_hv_c, res_flow_gpm = res_fg_c
           )
 
           # tanks
@@ -4217,7 +4251,8 @@ calculate_gac_system <- function(params) {
           p$service_pumps      <- as.numeric(get_value(p$service_pumps,      0))
           p$backwash_pumps     <- as.numeric(get_value(p$backwash_pumps,     0))
           p$residuals_pumps    <- as.numeric(get_value(p$residuals_pumps,    0))
-          p$no_backwash        <- as.numeric(get_value(p$no_backwash,        0))
+          # no_backwash may be "new pumps" / "existing pumps" — preserve string intent
+          p$no_backwash        <- get_value(p$no_backwash, 0)
           p$no_backwash_tank   <- get_value(p$no_backwash_tank,   FALSE)
           p$backwash_interval  <- as.numeric(get_value(p$backwash_interval,  168))
           p$residuals_disposal <- get_value(p$residuals_disposal, "POTW")
@@ -4260,12 +4295,22 @@ calculate_gac_system <- function(params) {
             BV_definition = p$BV_definition %||% "EBCT per vessel",
             Num_tanks = num_series
           )
+          {
+            wfgpm_p <- round(12 * pi * (actual_d / 2)^2, 0)
+            res_ts_p <- tolower(trimws(as.character(p$residuals_tank %||% "no holding tank")))
+            res_hv_p <- if (grepl("holding tank", res_ts_p) && !grepl("^no", res_ts_p)) "tanks" else "none"
+            res_fg_p <- if (res_hv_p == "none") wfgpm_p else {
+              bih_p <- safe_as_numeric(p$backwash_interval %||% 168, 168)
+              rst_p <- bih_p * 60 / max(1L, con_r$total_contactors)
+              2 * (wfgpm_p * 10) / rst_p
+            }
+          }
           pmp_r <- calculate_pumps(
             design_flow = design_flow_mgd, num_trains = as.integer(n_try),
             service_pumps = p$service_pumps, backwash_pumps = p$backwash_pumps,
             residuals_pumps = p$residuals_pumps, tank_geometry = p$tank_geometry,
             no_backwash = p$no_backwash, ss_cat2 = p$ss_cat2 %||% ss_cat2_p,
-            water_flush_gpm = round(12 * pi * (actual_d / 2)^2, 0)
+            water_flush_gpm = wfgpm_p, res_holding = res_hv_p, res_flow_gpm = res_fg_p
           )
           tnk_r <- calculate_tanks(
             design_flow = design_flow_mgd, no_backwash = p$no_backwash,
@@ -4735,7 +4780,8 @@ calculate_gac_system <- function(params) {
   params$service_pumps <- as.numeric(get_value(params$service_pumps, 0))
   params$backwash_pumps <- as.numeric(get_value(params$backwash_pumps, 0))
   params$residuals_pumps <- as.numeric(get_value(params$residuals_pumps, 0))
-  params$no_backwash <- as.numeric(get_value(params$no_backwash, 0))
+  # no_backwash may be "new pumps" / "existing pumps" — preserve string intent
+  params$no_backwash <- get_value(params$no_backwash, 0)
   params$no_backwash_tank <- get_value(params$no_backwash_tank, FALSE)
   params$backwash_interval <- as.numeric(get_value(params$backwash_interval, 168))
   params$residuals_disposal <- get_value(params$residuals_disposal, "POTW")
@@ -4886,6 +4932,38 @@ calculate_gac_system <- function(params) {
     as.integer(params$ss_cat2)
   } else if (design_flow_mgd < 1) 1L else if (design_flow_mgd <= 10) 2L else 3L
 
+  # ── WBS 5.3 pump inputs: derive res_holding and res_flow_gpm ─────────────────
+  # water_flush_gpm: 12 gpm/ft² × vessel (or basin) surface area
+  water_flush_for_pumps <- {
+    geom <- tolower(params$tank_geometry %||% "upright")
+    if (geom == "basin") {
+      bw <- as.numeric(contactor_results$basin_width  %||% params$basin_width  %||% 0)
+      bl <- as.numeric(contactor_results$basin_length %||% params$basin_length %||% 0)
+      if (bw > 0 && bl > 0) round(12 * bw * bl, 0) else 0
+    } else {
+      diam <- as.numeric(contactor_results$diameter %||% params$vessel_diameter %||% 0)
+      if (diam > 0) round(12 * pi * (diam/2)^2, 0) else 0
+    }
+  }
+  # res_holding: "tanks" when residuals_tank = "holding tank" (res_s1_opt = 1)
+  res_tank_str  <- tolower(trimws(as.character(params$residuals_tank %||% "no holding tank")))
+  res_hold_val  <- if (grepl("holding tank", res_tank_str) && !grepl("^no", res_tank_str)) "tanks" else "none"
+  # res_flow_gpm (workbook RM C12-C13):
+  #   no holding tank → water_flush_gpm  (= res_vol / backwash_time_min)
+  #   holding tank    → res_cap_factor(=2) × res_vol / res_stagger_time
+  #                     where res_vol = water_flush × 10 min,
+  #                           res_stagger = back_interval_hrs×60 / total_contactors
+  res_flow_for_pumps <- if (res_hold_val == "none") {
+    water_flush_for_pumps
+  } else {
+    back_int_hrs_p    <- safe_as_numeric(params$backwash_interval %||% 168, 168)
+    res_stagger_min_p <- back_int_hrs_p * 60 / max(1L, contactor_results$total_contactors)
+    res_vol_p         <- water_flush_for_pumps * 10  # backwash_time_min = 10 (CDA C62)
+    2 * res_vol_p / res_stagger_min_p               # res_cap_factor = 2 (CDA C193)
+  }
+  # Propagate into params so piping/controls/chemical_feed calls are also consistent
+  params$res_holding <- res_hold_val
+
   # Calculate pump requirements
   pump_results <- calculate_pumps(
     design_flow     = design_flow_mgd,
@@ -4896,17 +4974,9 @@ calculate_gac_system <- function(params) {
     tank_geometry   = params$tank_geometry,
     no_backwash     = params$no_backwash,
     ss_cat2         = ss_cat2_main,
-    water_flush_gpm = {
-      geom <- tolower(params$tank_geometry %||% "upright")
-      if (geom == "basin") {
-        bw <- as.numeric(contactor_results$basin_width  %||% params$basin_width  %||% 0)
-        bl <- as.numeric(contactor_results$basin_length %||% params$basin_length %||% 0)
-        if (bw > 0 && bl > 0) round(12 * bw * bl, 0) else 0
-      } else {
-        diam <- as.numeric(contactor_results$diameter %||% params$vessel_diameter %||% 0)
-        if (diam > 0) round(12 * pi * (diam/2)^2, 0) else 0
-      }
-    }
+    water_flush_gpm = water_flush_for_pumps,
+    res_holding     = res_hold_val,
+    res_flow_gpm    = res_flow_for_pumps
   )
   
   # Calculate tank requirements

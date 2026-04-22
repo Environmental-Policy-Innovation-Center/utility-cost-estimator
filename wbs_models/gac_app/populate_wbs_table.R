@@ -840,11 +840,15 @@ populate_wbs_values <- function(wbs, item_lower, contactors, tanks, piping, pump
   }
 
   # ── 9.1  Initial GAC Charge ──────────────────────────────────────────────────
-  # qty = total GAC mass (lbs), uc = $/lb, tc = initial fill cost
+  # qty = total GAC mass (lbs) across ALL vessels including NRD standby, because
+  #       every vessel is physically filled at installation (workbook OUTPUT J248).
+  # total_gac_mass_lb_fill is computed in calculate_gac_system() using
+  # total_contactors after AutoSize resolves the full vessel count.
+  # Falls back to total_gac_mass_lb (operating-only) for backward compatibility.
   if (grepl("^9\\.1$", wbs)) {
-    qty <- gac$total_gac_mass_lb  %||% NA_real_
-    uc  <- gac$gac_unit_cost      %||% NA_real_
-    tc  <- gac$initial_fill_cost  %||% NA_real_
+    qty <- gac$total_gac_mass_lb_fill %||% gac$total_gac_mass_lb %||% NA_real_
+    uc  <- gac$gac_unit_cost          %||% NA_real_
+    tc  <- gac$initial_fill_cost      %||% NA_real_
   }
 
   # ── 14.1.1 / 14.2.1 / 14.3.1 / 14.4.1  Buildings ────────────────────────────

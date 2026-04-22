@@ -4845,6 +4845,39 @@ calculate_gac_system <- function(params) {
     basin_op_depth  = contactor_results$basin_depth 
   )
   
+  # ── WBS 9.1 patch: initial fill uses ALL vessels (operating + NRD standby) ────
+  # calculate_gac_requirements above was called with num_trains × V (operating only),
+  # which is correct for O&M bed-life / throughput calculations — NRD vessels are
+  # idle standby and do not consume carbon during normal operation.
+  #
+  # WBS 9.1 (OUTPUT J248) counts the initial GAC charge for EVERY vessel installed
+  # at the site, including standby NRD units, because all vessels are physically
+  # filled at installation.
+  #
+  # We override initial_fill_cost and gac_unit_cost in gac_results and add a
+  # total_gac_mass_lb_fill field for the WBS 9.1 quantity display.
+  # total_gac_mass_lb (operating trains only) is intentionally preserved for O&M.
+  {
+    gac_density_fill <- params$GAC_density %||% 30
+    fill_vol_cf      <- contactor_results$gac_volume_per_contactor *
+                          contactor_results$total_contactors
+    fill_mass_lb     <- fill_vol_cf * gac_density_fill
+    fill_D           <- min(fill_mass_lb, 40000)
+    fill_uc          <- if (fill_D == 0) 0 else 2.101628083 * exp(-5.637e-06 * fill_D)
+
+    gac_results$total_gac_mass_lb_fill <- fill_mass_lb            # WBS 9.1 quantity (lbs)
+    gac_results$gac_unit_cost          <- fill_uc                 # WBS 9.1 unit cost ($/lb)
+    gac_results$initial_fill_cost      <- fill_mass_lb * fill_uc  # WBS 9.1 total cost ($)
+
+    message(sprintf(
+      "[WBS 9.1] Initial fill (all vessels): %d × %.2f cf = %.2f cf | %.0f lb × $%.4f/lb = $%.0f",
+      contactor_results$total_contactors,
+      contactor_results$gac_volume_per_contactor,
+      fill_vol_cf, fill_mass_lb, fill_uc,
+      fill_mass_lb * fill_uc
+    ))
+  }
+
   # Workbook: ss_cat2 = 1 (<1 MGD), 2 (1-10 MGD), 3 (>10 MGD)
   # Controls pump inclusion, NRD, building type, etc.
   # params$ss_cat2 is typically NULL (not user-supplied), so must derive from flow.
@@ -4995,36 +5028,35 @@ calculate_gac_system <- function(params) {
         ceiling((d_m+2*sp_m)^2 + (n_m-1)*(d_m+2*sp_m)*(d_m+sp_m/2))
       else
         ceiling((d_m+2*sp_m)^2 + (n_m-1)*(d_m+2*sp_m)*(d_m+sp_m))
-      if (design_flow_mgd < 1) {
-        vfp_m
-      } else {
-        wf_m    <- round(12 * pi * (d_m/2)^2, 0)
-        bv_m    <- wf_m * 10 / 7.48
-        # Workbook bt_diam: ROUNDUP(2*MAX((2*bt_cf/PI())^(1/3), (4*bt_cf/PI()/(14-2))^0.5), 0)
-        bt_d_m  <- ceiling(2 * max((2*bv_m/pi)^(1/3), sqrt(4*bv_m/pi/12)))
-        sp_bt_m <- min(bt_d_m, 6)
-        bt_fp_m <- ceiling((bt_d_m + 2*sp_bt_m)^2)
-        # pump_fp: actual booster + backwash pump footprints (pump_dim_table_cl, space_pumps_cust=4ft)
-        sp_p_m <- 4
-        booster_gpm_m <- min(design_flow_mgd * 1e6 / 1440 * 1.25, 35000)
-        pump_l_m <- if (booster_gpm_m <= 350) 2.5 else if (booster_gpm_m <= 1740) 3.75 else if (booster_gpm_m <= 7000) 5 else 7.083
-        boost_fp_m <- ceiling((pump_l_m+sp_p_m)*(pump_l_m+2*sp_p_m))
-        bpft_m   <- wf_m * 1.25
-        n_bop_m  <- max(1L, ceiling(bpft_m / 10000))
-        n_btot_m <- n_bop_m + 1L
-        bpr_m    <- bpft_m / n_bop_m
-        bpl_m    <- if (bpr_m <= 350) 2.5 else if (bpr_m <= 1740) 3.75 else if (bpr_m <= 7000) 5 else 7.083
-        back_pump_fp_m <- ceiling((bpl_m+sp_p_m)*(bpl_m+2*sp_p_m) + (n_btot_m-1)*(bpl_m+2*sp_p_m)*(bpl_m+sp_p_m))
-        pump_fp_m <- boost_fp_m + back_pump_fp_m
-        n_e_m   <- if      (design_flow_mgd <= 0.124)  1.0
-                   else if (design_flow_mgd <= 0.74)   1.2
-                   else if (design_flow_mgd <= 2.152)  1.6
-                   else if (design_flow_mgd <= 7.365)  2.8
-                   else if (design_flow_mgd <= 22.614) 3.8
-                   else 7.8
-        fp_req_m <- vfp_m + bt_fp_m + pump_fp_m + n_e_m * 100
-        if (fp_req_m >= 10000) vfp_m else fp_req_m
-      }
+      # ── WBS 14.1.1 fix: always compute full footprint (vessel + backwash tank +
+      #    pumps + office), not just vessel footprint for small systems.
+      #    n_e_m table already handles design_flow_mgd <= 0.124 → 1.0 office FTE.
+      wf_m    <- round(12 * pi * (d_m/2)^2, 0)
+      bv_m    <- wf_m * 10 / 7.48
+      # Workbook bt_diam: ROUNDUP(2*MAX((2*bt_cf/PI())^(1/3), (4*bt_cf/PI()/(14-2))^0.5), 0)
+      bt_d_m  <- ceiling(2 * max((2*bv_m/pi)^(1/3), sqrt(4*bv_m/pi/12)))
+      sp_bt_m <- min(bt_d_m, 6)
+      bt_fp_m <- ceiling((bt_d_m + 2*sp_bt_m)^2)
+      # pump_fp: actual booster + backwash pump footprints (pump_dim_table_cl, space_pumps_cust=4ft)
+      sp_p_m <- 4
+      booster_gpm_m <- min(design_flow_mgd * 1e6 / 1440 * 1.25, 35000)
+      pump_l_m <- if (booster_gpm_m <= 350) 2.5 else if (booster_gpm_m <= 1740) 3.75 else if (booster_gpm_m <= 7000) 5 else 7.083
+      boost_fp_m <- ceiling((pump_l_m+sp_p_m)*(pump_l_m+2*sp_p_m))
+      bpft_m   <- wf_m * 1.25
+      n_bop_m  <- max(1L, ceiling(bpft_m / 10000))
+      n_btot_m <- n_bop_m + 1L
+      bpr_m    <- bpft_m / n_bop_m
+      bpl_m    <- if (bpr_m <= 350) 2.5 else if (bpr_m <= 1740) 3.75 else if (bpr_m <= 7000) 5 else 7.083
+      back_pump_fp_m <- ceiling((bpl_m+sp_p_m)*(bpl_m+2*sp_p_m) + (n_btot_m-1)*(bpl_m+2*sp_p_m)*(bpl_m+sp_p_m))
+      pump_fp_m <- boost_fp_m + back_pump_fp_m
+      n_e_m   <- if      (design_flow_mgd <= 0.124)  1.0
+                 else if (design_flow_mgd <= 0.74)   1.2
+                 else if (design_flow_mgd <= 2.152)  1.6
+                 else if (design_flow_mgd <= 7.365)  2.8
+                 else if (design_flow_mgd <= 22.614) 3.8
+                 else 7.8
+      fp_req_m <- vfp_m + bt_fp_m + pump_fp_m + n_e_m * 100
+      if (fp_req_m >= 10000) vfp_m else fp_req_m
     }
   )
   

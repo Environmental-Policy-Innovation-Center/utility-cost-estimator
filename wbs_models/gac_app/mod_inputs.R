@@ -697,7 +697,6 @@ inputsServer <- function(id) {
                    input$carbon_life_bed_vol)
           } else std$freund_1,
           freund_2        = if (is_other && isTRUE(input$carbon_life_type == "freundlich")) input$freund_1_n else std$freund_2,
-          bed_life_direct = std$bed_life_direct,
 
           # Contactor configuration
           tank_geometry            = std$tank_geom_I,
@@ -738,6 +737,19 @@ inputsServer <- function(id) {
           include_hvac      = std$include_HVAC_I,
           include_land      = std$include_land_I,
           retrofit          = std$retrofit_I,
+
+          # Add-on flag — 1 when GAC is added to an existing system (e.g. UVAOP Quench).
+          # Suppresses inlet flow meter, PLC CPU/ethernet/interface, UPS, workstations,
+          # printers, and yard piping in calculate_controls() / compile_capital_costs().
+          # std$addon is populated by get_standard_inputs() from the addon_i sheet column.
+          add_on = {
+            # Sheet stores "add-on" text; also handle numeric 1/0 and "yes"/"true"
+            ao_raw <- tolower(trimws(as.character(std$addon %||% "0")))
+            av     <- suppressWarnings(as.numeric(ao_raw))
+            if (!is.na(av)) as.integer(av)
+            else if (ao_raw %in% c("add-on", "addon", "yes", "true")) 1L
+            else 0L
+          },
 
           # Standard inputs data (if available)
           standard_inputs = std

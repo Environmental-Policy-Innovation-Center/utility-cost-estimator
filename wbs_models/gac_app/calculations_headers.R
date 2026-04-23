@@ -1,6 +1,21 @@
 #load critical assumptions
 critical_assumptions <- getOption("critical.assumptions_cache")$critical_design_assumptions
 
+# ── CDA startup diagnostic ────────────────────────────────────────────────────
+# Prints every range_name loaded from the Google Sheets critical_design_assumptions
+# tab so it's immediately clear whether required keys (target_bed_depth_over, etc.)
+# are present.  Safe to remove once confirmed.
+if (!is.null(critical_assumptions) && nrow(critical_assumptions) > 0) {
+  message("[CDA_LOADED] ", nrow(critical_assumptions), " rows. range_names:")
+  for (.rn in sort(critical_assumptions$range_name)) {
+    .rv <- critical_assumptions$value[critical_assumptions$range_name == .rn][1]
+    message(sprintf("  %-40s = %s", .rn, .rv))
+  }
+} else {
+  message("[CDA_LOADED] critical_assumptions is NULL or empty — all get_assumption() calls will return defaults!")
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
 get_assumption <- function(data, name, default = NA_real_) {
   val <- data |>
     dplyr::filter(range_name == name) |>
@@ -595,33 +610,33 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
 #'   GAC_yr_cf, off_regen_cost, makeup_gac_cost, and regen quantities.
 
 calculate_gac_requirements <- function(
-                                total_volume, 
-                                average_flow, 
+                                total_volume,
+                                average_flow,
                                 regen_type,
-                                influent_conc = NULL, 
-                                effluent_target = NULL, 
+                                influent_conc = NULL,
+                                effluent_target = NULL,
                                 # Bed-life / breakthrough parameters (workbook: Pump-Pipe-Structure sheet)
-                                freund_type     = 4,                   
-                                freund_1        = 66600,               
-                                freund_2        = NULL,                
-                                design_type     = 1,                  
-                                media_volume    = NULL,                
-                                num_treat_lines = NULL,                
-                                BV_definition   = "EBCT per vessel",   
-                                Num_tanks       = 1,                   
-                                op_num_basins   = NULL,                
-                                #GAC_each        = NULL,                
-                                GAC_density     = 30,                  
+                                freund_type     = 4,
+                                freund_1        = 66600,
+                                freund_2        = NULL,
+                                design_type     = 1,
+                                media_volume    = NULL,
+                                num_treat_lines = NULL,
+                                BV_definition   = "EBCT per vessel",
+                                Num_tanks       = 1,
+                                op_num_basins   = NULL,
+                                #GAC_each        = NULL,
+                                GAC_density     = 30,
                                 # Freundlich/BDST inputs (types 2,3 only)
-                                M = NULL, 
-                                C_0 = NULL, 
-                                C_b = NULL, 
+                                M = NULL,
+                                C_0 = NULL,
+                                C_b = NULL,
                                 QL = NULL,
-                                N_0_e = NULL, 
-                                v = NULL, 
+                                N_0_e = NULL,
+                                v = NULL,
                                 D = NULL,
-                                bed_depth      = NULL,    # ft — pressure vessel bed depth 
-                                basin_op_depth = NULL,    # ft — gravity basin GAC depth 
+                                bed_depth      = NULL,    # ft — pressure vessel bed depth
+                                basin_op_depth = NULL,    # ft — gravity basin GAC depth
                                 # Regeneration parameters
                                 makeup_rate     = 0.10,                # fraction of annual throughput as new GAC (on-site regen)
                                 makeup_rate_off = 0.30,                # fraction as new GAC (off-site regen)
@@ -631,6 +646,19 @@ calculate_gac_requirements <- function(
   # ── Coerce inputs ────────────────────────────────────────────────────────────
   total_volume    <- suppressWarnings(as.numeric(total_volume))
   average_flow    <- suppressWarnings(as.numeric(average_flow))   # MGD
+
+  # Normalise freund_type: map workbook text labels → numeric codes before coercion.
+  # The sheet stores human-readable labels (e.g. "carbon life value- months") that
+  # as.numeric() cannot parse; this mirrors the regen_type text-to-code mapping below.
+  if (!is.null(freund_type) && !suppressWarnings(is.finite(as.numeric(freund_type)))) {
+    ft_lc <- tolower(trimws(as.character(freund_type)))
+    freund_type <- if (grepl("month|direct", ft_lc))                     1L else
+                   if (grepl("freundlich|kf|isotherm", ft_lc))            2L else
+                   if (grepl("bdst|bed.*depth.*service", ft_lc))          3L else
+                   if (grepl("bed.?vol|bv|ebct|bed volume", ft_lc))       4L else
+                   freund_type   # unchanged — as.numeric() will handle or NA-fallback below
+  }
+
   freund_type     <- suppressWarnings(as.numeric(freund_type))
   freund_1        <- suppressWarnings(as.numeric(freund_1))
   design_type     <- suppressWarnings(as.numeric(design_type))
@@ -794,6 +822,7 @@ calculate_gac_requirements <- function(
   )
 
   bed_life_months <- as.numeric(bed_life_months)
+
   if (is.na(bed_life_months) || bed_life_months <= 0) bed_life_months <- 12  # fallback
 
   # ── Annual throughput (cf/yr) ─────────────────────────────────────────────────
@@ -1609,19 +1638,10 @@ calculate_piping_valves <- function(
       res_vol_gal / backwash_time_min  # = back_flow_gpm
     }
 
-    # Pipe diameter: MAX(min_res_pipe_size, VLOOKUP(res_flow, pipe_size_table_cl))
-    # Workbook RM C122
+    # ── 3.4.1  Residuals pipe material ─────────────────────────────────────────
+    # Always computed — the pipe exists even when backwash uses existing pumps.
     res_pipe_diam <- max(min_res_pipe_size, lookup_pipe_diameter(res_flow_gpm))
-
-    # Pipe length: res_pipe_mult × facil_length + add_res_pipe_length
-    # Workbook RM C121
-    res_pipe_length    <- res_pipe_mult * facil_length + add_res_pipe_length  # e.g. 1×10 + 40 = 50 ft
-
-    # Buried pipe length: only the add-on portion goes underground
-    # Workbook RM C123: = add_res_pipe_length (40 ft by default)
-    buried_res_pipe_length <- add_res_pipe_length
-
-    # Residuals pipe material cost
+    res_pipe_length <- res_pipe_mult * facil_length + add_res_pipe_length
     res_pipe_cost_result <- tryCatch({
       calculate_piping_cost(res_pipe_diam, res_pipe_length, "PVC", component_level, getOption("gac.coeff_table"))
     }, error = function(e) {
@@ -1629,56 +1649,59 @@ calculate_piping_valves <- function(
     })
     res_pipe_material_cost <- res_pipe_cost_result$total_cost
 
-    # ── Trench geometry (Residuals Management C132-C136) ──────────────────────
-    res_trn_depth_in <- max(frost_in, min_trench_depth_in)  # = 38" for defaults
-    d_ft    <- res_pipe_diam     / 12
-    bd_ft   <- bedding_depth_in  / 12
-    td_ft   <- res_trn_depth_in  / 12
+    # ── 3.4.2/3/5/6  Buried installation items ─────────────────────────────────
+    # Workbook RM C123: buried_res_pipe_length = add_res_pipe_length only when new
+    # backwash pumps are installed. When backwash_pumps = 0 (no new backwash
+    # infrastructure — existing pumps or small-system default), the residuals
+    # discharge connects to existing above-ground infrastructure and there is no
+    # new buried pipe → excavation, bedding, backfill, thrust blocks are NA.
+    if (backwash_pumps == 0) {
+      buried_res_pipe_length <- 0
+      res_trench_area        <- NA_real_
+      res_trench_vol_cy      <- NA_real_
+      res_bedding_vol_cy     <- NA_real_
+      res_block_vol_cy       <- NA_real_
+    } else {
+      buried_res_pipe_length <- add_res_pipe_length  # Workbook RM C123
 
-    # Trench cross-section area (ft²) — RM C132
-    res_trench_area <- (d_ft + 2) * (bd_ft + d_ft + td_ft) +
-                      (bd_ft + d_ft + td_ft)^2 * tan(trench_angle_rad)
+      res_trn_depth_in <- max(frost_in, min_trench_depth_in)  # = 38" for defaults
+      d_ft    <- res_pipe_diam    / 12
+      bd_ft   <- bedding_depth_in / 12
+      td_ft   <- res_trn_depth_in / 12
 
-    # Trench volume (cy) — RM C133-C134
-    res_trench_vol_cy <- if (buried_res_pipe_length == 0 || res_pipe_diam == 0) 0 else
-      res_trench_area * buried_res_pipe_length / 27
+      # Trench cross-section area (ft²) — RM C132
+      res_trench_area <- (d_ft + 2) * (bd_ft + d_ft + td_ft) +
+                        (bd_ft + d_ft + td_ft)^2 * tan(trench_angle_rad)
 
-    # Bedding cross-section (ft²) — RM C135
-    bdg_d_ft <- bedding_pct * d_ft
-    res_bedding_area <- (d_ft + 2) * (bd_ft + bdg_d_ft) +
-                        (bd_ft + bdg_d_ft)^2 * tan(trench_angle_rad) -
-                        ((d_ft/2)^2 * acos(pmax(-1, pmin(1, (d_ft/2 - bdg_d_ft) / (d_ft/2)))) -
-                        (d_ft/2 - bdg_d_ft) * sqrt(pmax(0, 2*(d_ft/2)*bdg_d_ft - bdg_d_ft^2)))
+      # Trench volume (cy) — RM C133-C134
+      res_trench_vol_cy <- res_trench_area * buried_res_pipe_length / 27
 
-    # Bedding volume (cy) — RM C136: divided by 2 per workbook formula
-    res_bedding_vol_cy <- if (buried_res_pipe_length == 0 || res_pipe_diam == 0) 0 else
-      res_bedding_area * buried_res_pipe_length / 2 / 27
+      # Bedding volume (cy) — RM C136
+      bdg_d_ft <- bedding_pct * d_ft
+      res_bedding_area <- (d_ft + 2) * (bd_ft + bdg_d_ft) +
+                          (bd_ft + bdg_d_ft)^2 * tan(trench_angle_rad) -
+                          ((d_ft/2)^2 * acos(pmax(-1, pmin(1, (d_ft/2 - bdg_d_ft) / (d_ft/2)))) -
+                          (d_ft/2 - bdg_d_ft) * sqrt(pmax(0, 2*(d_ft/2)*bdg_d_ft - bdg_d_ft^2)))
+      res_bedding_vol_cy <- res_bedding_area * buried_res_pipe_length / 2 / 27
 
-    # ── Thrust block (Residuals Management C125-C131) ─────────────────────────
-    # Thrust force: VLOOKUP(res_pipe_diam, thrust_block_table_cl, 2) × 2.2
-    thrust_block_table <- data.frame(
-      min_diam = c(0,    2.1,   3.1,   4.1,    6.1,    8.1,    10.1,   12.1,
-                  14.1, 16.1,  18.1,  20.1,   24.1,   28.1,   30.1,   40.1,   42.1),
-      force_kg  = c(347.6, 681.9, 1260.0, 2835.0, 4990.7, 7813.4, 11192.3, 15314.3,
-                    20002.3, 25315.5, 31130.7, 45064.3, 61050.6, 70505.4, 124768.6,
-                    137828.6, 180257.3)
-    )
-    thrust_idx       <- max(which(thrust_block_table$min_diam <= res_pipe_diam))
-    res_thrust_force <- thrust_block_table$force_kg[thrust_idx] * 2.2  # kg → lbs
-
-    # Bearing area (ft²) — RM C126
-    res_bearing_area <- 1.5 * res_thrust_force /
-                        (soil_dens * (td_ft + d_ft) * Coeff_Kp * Reduction)
-
-    # Block dimensions (RM C127-C130)
-    H_tb  <- sqrt(res_bearing_area / 2)
-    L_tb  <- res_bearing_area / H_tb
-    F_tb  <- max(0.5, d_ft)
-    T_tb  <- L_tb / 2
-
-    # Thrust block volume (cy) — RM C131
-    res_block_vol_cy <- if (buried_res_pipe_length == 0 || res_pipe_diam == 0) 0 else
-      (T_tb + (buried_res_pipe_length / 12) / 2) * (L_tb + F_tb) / 2 * H_tb / 27
+      # Thrust block volume (cy) — RM C131
+      thrust_block_table <- data.frame(
+        min_diam = c(0, 2.1, 3.1, 4.1, 6.1, 8.1, 10.1, 12.1,
+                     14.1, 16.1, 18.1, 20.1, 24.1, 28.1, 30.1, 40.1, 42.1),
+        force_kg = c(347.6, 681.9, 1260.0, 2835.0, 4990.7, 7813.4, 11192.3, 15314.3,
+                     20002.3, 25315.5, 31130.7, 45064.3, 61050.6, 70505.4, 124768.6,
+                     137828.6, 180257.3)
+      )
+      thrust_idx       <- max(which(thrust_block_table$min_diam <= res_pipe_diam))
+      res_thrust_force <- thrust_block_table$force_kg[thrust_idx] * 2.2
+      res_bearing_area <- 1.5 * res_thrust_force /
+                          (soil_dens * (td_ft + d_ft) * Coeff_Kp * Reduction)
+      H_tb <- sqrt(res_bearing_area / 2)
+      L_tb <- res_bearing_area / H_tb
+      F_tb <- max(0.5, d_ft)
+      T_tb <- L_tb / 2
+      res_block_vol_cy <- (T_tb + (buried_res_pipe_length / 12) / 2) * (L_tb + F_tb) / 2 * H_tb / 27
+    }
   
   # ── 7. Piping installation costs ──────────────────────────────────────────
   excavation_cy     <- (total_pipe_length * 2 * 3) / 27
@@ -1707,7 +1730,10 @@ calculate_piping_valves <- function(
       component_level = component_level,
       design_flow_mgd = design_flow_mgd,
       no_backwash     = no_backwash,
-      no_back_tank    = no_backwash || (num_back_tanks == 0),  # workbook: no_back_tank=1 when using existing storage
+      # no_back_tank=1 when existing storage is used (no dedicated backwash tank).
+      # no_backwash may arrive as a string ("existing pumps") which breaks ||.
+      # isTRUE(safe_as_logical(...)) safely resolves any type to a single TRUE/FALSE.
+      no_back_tank    = isTRUE(safe_as_logical(no_backwash, FALSE)) || (num_back_tanks == 0),
       automation_level  = automation_level,
       proc_pipe_diam    = proc_pipe_diam,
       back_pipe_diam    = back_pipe_diam,
@@ -1718,7 +1744,7 @@ calculate_piping_valves <- function(
       res_pumps      = tanks$residuals_pumps  %||% 0,
       res_hold_tanks = (tanks$num_residuals_tanks %||% 0) +
                        (tanks$num_residuals_basins %||% 0),
-      res_pipe_diam  = res_pipe_diam,
+      res_pipe_diam  = if (is.na(res_pipe_diam)) 0 else res_pipe_diam,
       num_contactors_in_series = safe_as_numeric(params$num_contactors_in_series %||% 1, 1),
       coeff_table              = getOption("gac.coeff_table")
     )
@@ -1970,11 +1996,15 @@ calculate_controls <- function(automation_level, num_contactors, num_trains, man
   tot_fm_proc <- 0L
   proc_meter_size <- proc_pipe_diam
 
-  # ── 6.3 tot_fm_back (CDA C108 = 1) ────────────────────────────────────────
-  tot_fm_back <- 1L
+  # ── 6.3 tot_fm_back (CDA C108 = 1, conditioned on new backwash) ───────────
+  # Workbook: backwash FM only installed when new backwash pumps are present.
+  # When backwash_pumps = 0 (existing supply or small-system default), no new meter.
+  tot_fm_back <- if (backwash_pumps > 0) 1L else 0L
   back_meter_size <- back_pipe_diam
 
   # ── 6.4 tot_fm_res (CDA C210 = 1) ─────────────────────────────────────────
+  # Residuals FM is always present when residuals piping exists, even when
+  # there are no dedicated residuals pumps (gravity flow to discharge still metered).
   tot_fm_res <- 1L
   res_meter_size <- res_pipe_diam
 
@@ -3749,6 +3779,79 @@ calculate_gac_system <- function(params) {
     }
   }
   
+  # ── Vessel-capacity shortcut (comm_diam present in sheet) ──────────────────
+  # When the standard_inputs sheet supplies an explicit vessel diameter (comm_diam)
+  # AND use_autosize is not explicitly "yes", derive num_trains from that diameter
+  # rather than running the full iterative AutoSize optimizer.
+  #
+  # This mirrors the workbook's behaviour for contaminants such as UVAOP Quench
+  # where one specific vessel size is pre-engineered in the sheet.
+  #
+  # Triggering logic:
+  #   - comm_diam is non-NA and positive (sheet has a specific vessel diameter)
+  #   - use_autosize is NOT explicitly "yes"  (absent/blank/any other value → use shortcut)
+  #
+  # bed_depth is back-computed from actual volume ÷ cross-section area so that
+  # the sheet does not need to supply a bed_depth column separately.
+  #
+  # Key fields read directly from standard_inputs (not already-defaulted params):
+  #   comm_diam           — vessel inner diameter (ft)
+  #   comm_height_length  — straight-side height (ft)
+  #   Num_tanks_I         — contactors in series per train
+  #   use_autosize        — "yes" forces full AutoSize; anything else allows shortcut
+  if (need_to_calculate_trains && !is.null(params$standard_inputs)) {
+    si <- params$standard_inputs
+    si_use_autosize <- tolower(trimws(as.character(si$use_autosize %||% "")))
+    si_diam <- suppressWarnings(as.numeric(si$comm_diam           %||% NA))
+    si_ht   <- suppressWarnings(as.numeric(si$comm_height_length  %||% NA))
+    si_ser  <- suppressWarnings(as.numeric(si$Num_tanks_I         %||% 1))
+    if (is.na(si_ser) || si_ser < 1) si_ser <- 1
+
+    message(sprintf(
+      "[shortcut_check] use_autosize='%s' | comm_diam='%s' (numeric: %s)",
+      si_use_autosize, as.character(si$comm_diam %||% "NULL"),
+      as.character(si_diam)
+    ))
+
+    if (si_use_autosize != "yes" && !is.na(si_diam) && si_diam > 0) {
+
+      # Use same target_bd threshold as the AutoSize loop (CDA C25/C26):
+      # < 1 MGD → 4 ft, ≥ 1 MGD → 7 ft
+      shortcut_target_bd <- if (as.numeric(design_flow_mgd) < 1.0) 4.0 else 7.0
+
+      n_from_dims <- calculate_num_trains(
+        design_flow              = design_flow_mgd,
+        ebct                     = ebct_minutes,
+        bed_depth                = shortcut_target_bd,
+        vessel_diameter          = si_diam,
+        vessel_height_length     = if (!is.na(si_ht) && si_ht > 0) si_ht else 8,
+        tank_geometry            = params$tank_geometry %||% "upright",
+        design_type              = if (isTRUE(tolower(params$tank_geometry) == "basin")) 2 else 1,
+        num_contactors_in_series = si_ser
+      )
+      params$num_trains <- max(1L, as.integer(n_from_dims))
+
+      # Back-compute actual bed depth from volume and the derived n_trains.
+      # This matches the workbook: bed_depth = GAC_volume / (cross_section × n_trains).
+      si_sa_one  <- pi * (si_diam / 2)^2
+      df_gpm_sc  <- as.numeric(design_flow_mgd) * 1e6 / 1440
+      vol_cf_sc  <- df_gpm_sc * as.numeric(ebct_minutes) / 7.481
+      raw_bd_sc  <- vol_cf_sc / (si_sa_one * params$num_trains * si_ser)
+      computed_bd <- ceiling(raw_bd_sc * 10) / 10   # ROUNDUP to 0.1 ft
+
+      # Restore sheet geometry so downstream code uses the workbook values,
+      # not the 2-ft / 6-ft defaults applied above.
+      params$vessel_diameter <- si_diam
+      params$bed_depth       <- computed_bd
+      if (!is.na(si_ht) && si_ht > 0) params$vessel_height_length <- si_ht
+      need_to_calculate_trains <- FALSE
+      message(sprintf(
+        "[AutoSize shortcut] comm_diam=%.1f ft → num_trains=%d, bed_depth=%.1f ft (computed)",
+        si_diam, params$num_trains, computed_bd
+      ))
+    }
+  }
+
   if (need_to_calculate_trains) {
 
     message("=== AUTO-CALCULATING NUM_TRAINS (iterative AutoSize) ===")
@@ -4190,8 +4293,37 @@ calculate_gac_system <- function(params) {
       num_series <- as.numeric(get_value(params$num_contactors_in_series %||% params$num_tanks, 1))
       comp_vol   <- df_gpm * ebct_num / 7.481
 
+      # Resolve is_addon once for the whole AutoSize loop.
+      # Sheet column addon_I stores "add-on" text; also handles numeric 1/0 and "yes".
+      is_addon <- {
+        ao <- params$add_on %||% 0
+        n  <- suppressWarnings(as.numeric(ao))
+        if (!is.na(n)) isTRUE(n == 1)
+        else isTRUE(tolower(trimws(as.character(ao))) %in% c("add-on","addon","yes","true"))
+      }
+      message(sprintf("[AutoSize] params$add_on='%s' → is_addon=%s",
+                      as.character(params$add_on %||% "NULL"), is_addon))
+
       flow_num  <- as.numeric(design_flow_mgd)
-      target_bd <- if (flow_num <= 0.1) 4.0 else 7.0   # CDA C25/C26  [GA] get_assumption(critical_assumptions, "target_bed_depth_under", 4) / "target_bed_depth_over", 7)
+
+      # target_bd resolution order (highest priority first):
+      #   1. standard_inputs$target_bd_I  — per-contaminant override in the sheet
+      #   2. critical_design_assumptions  — global CDA (target_bed_depth_under/over)
+      #   3. Hardcoded fallback           — 4.0 ft (flow ≤ 0.1 MGD) / 7.0 ft (flow > 0.1 MGD)
+      #
+      # Per-contaminant override is needed because the workbook stores target_bd in each
+      # contaminant's own CDA sheet. The global CDA Google Sheet has the PFAS/TCE default
+      # (7 ft) which is wrong for contaminants like UVAOP Quench (workbook CDA ≈ 5 ft).
+      # Add a `target_bd_I` column to the standard_inputs sheet for those contaminants.
+      # CDA C25/C26: threshold is 1 MGD (not 0.1 — that was a code error)
+      target_bd <- if (flow_num < 1.0) {
+        get_assumption(critical_assumptions, "target_bed_depth_under", 4.0)
+      } else {
+        get_assumption(critical_assumptions, "target_bed_depth_over",  7.0)
+      }
+      message(sprintf("[target_bd] flow=%.3f MGD → %.2f ft (%s)",
+                      flow_num, target_bd,
+                      if (flow_num < 1.0) "target_bed_depth_under (<1 MGD)" else "target_bed_depth_over (≥1 MGD)"))
 
       #TODO
       min_diam <- get_assumption(critical_assumptions, "min_diam", 1.5) #TODO
@@ -4285,8 +4417,14 @@ calculate_gac_system <- function(params) {
           #       IF(op_num_tanks=1, NRD_small_1, NRD_small)))
           # NRD_small_1=1 (CDA C9), NRD_small=0 (CDA C10), redund_freq=4 (CDA C16)
           # op_num_tanks = num_treat_lines × num_contactors_in_series
+          #
+          # Add-on exception: add-on systems have NRD=0 regardless of size —
+          # they attach to an existing system that provides inherent redundancy.
+          # Workbook confirms: UVAOP Quench (add-on) shows total contactors = 1 (NRD=0).
           op_num_tanks_try <- as.integer(n_try) * as.integer(num_series)
-          pv_nrd <- if (design_flow_mgd >= 1) {
+          pv_nrd <- if (is_addon) {
+            0L  # add-on: no standby vessel required
+          } else if (design_flow_mgd >= 1) {
             as.integer(ceiling(n_try / redund_freq))  # large: ROUNDUP(n/4, 0)
           } else {
             if (op_num_tanks_try == 1L) 1L else 0L    # small: NRD_small_1=1 or NRD_small=0
@@ -4565,9 +4703,15 @@ calculate_gac_system <- function(params) {
         c88       <- 2 * (sqrt(comp_vol / num_series / pi / max_bd / n_try) + Vessel_thickness)
         comp_min_d <- ceiling(2 * max(c88, min_diam)) / 2
 
+        # AutoSize E58: workbook uses ROUNDDOWN(2*raw_d, 0)/2 (not ROUNDUP as annotated).
+        # Confirmed empirically: UVAOP Quench raw_d=3.83 → ROUNDDOWN → 3.5 ft
+        # which gives bd=4.8 ft and h=8.0 ft, matching the workbook exactly.
         if (raw_d < comp_min_d)         { actual_d <- comp_min_d }
         else if (raw_d > max_diam_upright) { actual_d <- max_diam_upright }
-        else                             { actual_d <- ceiling(2 * raw_d) / 2 }
+        else {
+          actual_d <- floor(2 * raw_d) / 2
+          if (actual_d < comp_min_d) actual_d <- comp_min_d  # clamp to geometric minimum
+        }
 
         max_h_tbl <- vlookup_vessel(actual_d, vessel_max_h)
         min_h_tbl <- vlookup_vessel(actual_d, vessel_min_h)
@@ -4618,7 +4762,9 @@ calculate_gac_system <- function(params) {
 
         # Mirror the NRD formula used inside calc_ann_pv (CC C34) for debug logging
         dbg_op_tanks <- as.integer(n_try) * as.integer(num_series)
-        dbg_nrd <- if (design_flow_mgd >= 1) {
+        dbg_nrd <- if (is_addon) {
+          0L
+        } else if (design_flow_mgd >= 1) {
           as.integer(ceiling(n_try / redund_freq))
         } else {
           if (dbg_op_tanks == 1L) 1L else 0L
@@ -4933,8 +5079,8 @@ calculate_gac_system <- function(params) {
     makeup_rate     = params$makeup_rate      %||% 0.10,
     makeup_rate_off = params$makeup_rate_off  %||% 0.30,
     # needed by options 2 and 3 to derive D, v, M
-    bed_depth       = contactor_results$bed_depth,    
-    basin_op_depth  = contactor_results$basin_depth 
+    bed_depth       = contactor_results$bed_depth,
+    basin_op_depth  = contactor_results$basin_depth
   )
   
   # ── WBS 9.1 patch: initial fill uses ALL vessels (operating + NRD standby) ────
@@ -5199,9 +5345,12 @@ calculate_gac_system <- function(params) {
     include_pilot = params$include_pilot,
     retrofit = params$retrofit,
     design_flow_mgd = design_flow_mgd,
-    residuals_disposal = params$residuals_disposal %||% "potw"
+    residuals_disposal = params$residuals_disposal %||% "potw",
+    # add_on: TRUE for add-on systems (e.g. UVAOP Quench); suppresses yard piping
+    # and stand-by power per workbook compile_capital_costs add_on logic.
+    add_on = isTRUE(safe_as_numeric(params$add_on %||% 0) == 1)
   )
-  
+
   # Calculate O&M costs
   om_costs <- calculate_om_costs(
     design_flow_mgd    = design_flow_mgd,

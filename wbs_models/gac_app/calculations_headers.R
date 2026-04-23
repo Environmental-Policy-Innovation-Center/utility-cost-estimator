@@ -3816,8 +3816,8 @@ calculate_gac_system <- function(params) {
     if (si_use_autosize != "yes" && !is.na(si_diam) && si_diam > 0) {
 
       # Use same target_bd threshold as the AutoSize loop (CDA C25/C26):
-      # < 1 MGD → 4 ft, ≥ 1 MGD → 7 ft
-      shortcut_target_bd <- if (as.numeric(design_flow_mgd) < 1.0) 4.0 else 7.0
+      # ≤ 0.1 MGD → 4 ft, > 0.1 MGD → 7 ft
+      shortcut_target_bd <- if (as.numeric(design_flow_mgd) <= 0.1) 4.0 else 7.0
 
       n_from_dims <- calculate_num_trains(
         design_flow              = design_flow_mgd,
@@ -4306,27 +4306,30 @@ calculate_gac_system <- function(params) {
 
       flow_num  <- as.numeric(design_flow_mgd)
 
-      # target_bd resolution order (highest priority first):
-      #   1. standard_inputs$target_bd_I  — per-contaminant override in the sheet
-      #   2. critical_design_assumptions  — global CDA (target_bed_depth_under/over)
-      #   3. Hardcoded fallback           — 4.0 ft (flow ≤ 0.1 MGD) / 7.0 ft (flow > 0.1 MGD)
+      # target_bd (CDA C25/C26): threshold is 0.1 MGD per workbook AutoSize logic.
+      #   flow ≤ 0.1 MGD → target_bed_depth_under = 4 ft
+      #   flow > 0.1 MGD → target_bed_depth_over  = 7 ft
       #
-      # Per-contaminant override is needed because the workbook stores target_bd in each
-      # contaminant's own CDA sheet. The global CDA Google Sheet has the PFAS/TCE default
-      # (7 ft) which is wrong for contaminants like UVAOP Quench (workbook CDA ≈ 5 ft).
-      # Add a `target_bd_I` column to the standard_inputs sheet for those contaminants.
-      # CDA C25/C26: threshold is 1 MGD (not 0.1 — that was a code error)
-      target_bd <- if (flow_num < 1.0) {
+      # Note: contaminants with pre-specified vessel dimensions in the standard_inputs
+      # sheet (comm_diam set, use_autosize ≠ "yes") bypass this block entirely via
+      # the shortcut path above — UVAOP Quench is one such case.
+      target_bd <- if (flow_num <= 0.1) {
         get_assumption(critical_assumptions, "target_bed_depth_under", 4.0)
       } else {
         get_assumption(critical_assumptions, "target_bed_depth_over",  7.0)
       }
       message(sprintf("[target_bd] flow=%.3f MGD → %.2f ft (%s)",
                       flow_num, target_bd,
-                      if (flow_num < 1.0) "target_bed_depth_under (<1 MGD)" else "target_bed_depth_over (≥1 MGD)"))
+                      if (flow_num <= 0.1) "target_bed_depth_under (≤0.1 MGD)" else "target_bed_depth_over (>0.1 MGD)"))
 
       #TODO
-      min_diam <- get_assumption(critical_assumptions, "min_diam", 1.5) #TODO
+      # min_diam: minimum standard pressure vessel diameter.
+      # The correct workbook default is 3.5 ft — the smallest commercially
+      # pre-fabricated FG/CSP vessel used in the WBS model.
+      # This drives comp_min_d (AutoSize C88) which clamps small raw_d values
+      # upward, ensuring both PFAS and UVAOP Quench (add-on) are sized at 3.5 ft
+      # when target_bd=7 produces a raw_d below 3.5 ft.
+      min_diam <- get_assumption(critical_assumptions, "min_diam", 3.5)
       max_diam_upright <- get_assumption(critical_assumptions, "max_diam_override", 14)   # workbook max_diam CDA C18/CC C24  [GA] 
       
       min_bd   <- get_assumption(critical_assumptions, "min_bed_depth", 2) 
@@ -4703,15 +4706,13 @@ calculate_gac_system <- function(params) {
         c88       <- 2 * (sqrt(comp_vol / num_series / pi / max_bd / n_try) + Vessel_thickness)
         comp_min_d <- ceiling(2 * max(c88, min_diam)) / 2
 
-        # AutoSize E58: workbook uses ROUNDDOWN(2*raw_d, 0)/2 (not ROUNDUP as annotated).
-        # Confirmed empirically: UVAOP Quench raw_d=3.83 → ROUNDDOWN → 3.5 ft
-        # which gives bd=4.8 ft and h=8.0 ft, matching the workbook exactly.
+        # AutoSize E58: ROUNDUP(2*raw_d, 0)/2 — rounds UP to nearest 0.5 ft standard size.
+        # Verified against PFAS 0.124 MGD: raw_d=3.24 → ceiling(6.48)/2 = 3.5 ft ✓
+        # UVAOP Quench (d=3.5) is not sized by AutoSize — its comm_diam is pre-specified
+        # in the workbook's CC sheet and must be added to the standard_inputs Google Sheet.
         if (raw_d < comp_min_d)         { actual_d <- comp_min_d }
         else if (raw_d > max_diam_upright) { actual_d <- max_diam_upright }
-        else {
-          actual_d <- floor(2 * raw_d) / 2
-          if (actual_d < comp_min_d) actual_d <- comp_min_d  # clamp to geometric minimum
-        }
+        else                             { actual_d <- ceiling(2 * raw_d) / 2 }
 
         max_h_tbl <- vlookup_vessel(actual_d, vessel_max_h)
         min_h_tbl <- vlookup_vessel(actual_d, vessel_min_h)

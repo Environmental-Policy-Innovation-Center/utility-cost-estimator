@@ -455,9 +455,8 @@ calculate_bed_life <- function(ebct, K, n, C0, Cb) {
 calculate_target_bed_depth <- function(design_flow_mgd, tank_geometry = "upright") {
   
   # Default targets from Critical Design Assumptions sheet (CDA C25/C26)
-  # Threshold is 1 MGD per CDA description, not 0.1
-  target_bed_depth_under <- 4   # for flows < 1 MGD
-  target_bed_depth_over <- 7    # for flows ≥ 1 MGD
+  target_bed_depth_under <- 4   # for flows ≤ 0.1 MGD
+  target_bed_depth_over <- 7    # for flows > 0.1 MGD
   target_bed_depth_horiz <- 8   # for horizontal vessels
   
   if (tank_geometry == "horizontal") {

@@ -351,6 +351,15 @@ div(id = "loading-overlay",
                   width = "100%"
                 ),
 
+                # Residuals holding tank — hardcoded default note
+                tags$p(
+                  style = "margin: 10px 0 0; font-size: 12px; color: #666; font-style: italic;",
+                  tags$i(class = "fa fa-info-circle", style = "margin-right: 4px; color: #1a5276;"),
+                  "Residuals holding tank: fixed at ",
+                  tags$b("no holding tank"),
+                  " for this calculation path. Direct discharge to POTW without intermediate storage is the standard assumption for VOCs, HAA5, and TTHM at the flow sizes most commonly modeled here. At design flows above 1 MGD a holding tank may be warranted, but it's not yet configurable."
+                ),
+
                 # GAC Transfer Method
                 tags$div(
                   style = "display: flex; align-items: center; gap: 6px; margin-bottom: 2px; margin-top: 10px;",
@@ -871,7 +880,10 @@ inputsServer <- function(id) {
 
           # Residuals
           residuals_disposal = if (is_other) input$residuals_disposal  else std$res_s2_opt_I,
-          residuals_tank     = std$res_s1_opt_I,
+          # Other path: always "no holding tank" — holding tank sizing is not
+          # implemented faithfully to the workbook and is not typical for VOCs,
+          # HAA5, or TTHM at the flows this path is designed for.
+          residuals_tank     = if (is_other) "no holding tank" else std$res_s1_opt_I,
           transfer_method    = if (is_other) input$gac_transfer_method  else std$transfer_method_I,
           solids_hazardous   = if (is_other && isTRUE(input$residuals_disposal == "evaporation pond")) input$solids_haz else std$solids_haz_I,
 

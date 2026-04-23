@@ -44,6 +44,22 @@ div(id = "loading-overlay",
               condition = "input['contam_I'] == 'Other'",
               ns = ns,
 
+              # Bootstrap popover initialisation (runs once when DOM is ready)
+              tags$script(HTML("
+                $(document).ready(function() {
+                  $(document).on('click', '[data-toggle=\"popover\"]', function(e) {
+                    e.stopPropagation();
+                    $(this).popover('toggle');
+                  });
+                  $(document).on('click', function(e) {
+                    if (!$(e.target).is('[data-toggle=\"popover\"]') &&
+                        $(e.target).closest('.popover').length === 0) {
+                      $('[data-toggle=\"popover\"]').popover('hide');
+                    }
+                  });
+                });
+              ")),
+
               tags$hr(style = "margin: 6px 0 14px;"),
 
               # Contaminant Name
@@ -56,14 +72,44 @@ div(id = "loading-overlay",
               # ── Carbon Life ─────────────────────────────────────────────────────
               tags$div(
                 style = "margin-top: 14px;",
-                tags$label("Carbon Life Input Type:", class = "control-label"),
+                tags$div(
+                  style = "display: flex; align-items: center; gap: 6px; margin-bottom: 4px;",
+                  tags$label("Carbon Life Input Type:", class = "control-label",
+                             style = "margin-bottom: 0;"),
+                  tags$i(
+                    class = "fa fa-info-circle",
+                    style = "color: #1a5276; cursor: pointer; font-size: 14px;",
+                    `data-toggle`    = "popover",
+                    `data-placement` = "right",
+                    `data-trigger`   = "click",
+                    `data-html`      = "true",
+                    `data-container` = "body",
+                    title = "Carbon Life Input Type",
+                    `data-content`   = paste0(
+                      "<p style='margin:0 0 6px'>How GAC treatment capacity is characterized ",
+                      "before carbon must be replaced or regenerated.</p>",
+                      "<p style='margin:0 0 4px'><b>Bed Volumes (BV):</b> Total volume of water ",
+                      "treated divided by the GAC bed volume. The preferred input when a ",
+                      "site-specific or literature BV value is available.</p>",
+                      "<ul style='padding-left:16px;margin:2px 0 6px'>",
+                      "<li>VOCs (e.g., TCE/PCE): ~40,000\u201366,600 BV</li>",
+                      "<li>HAA5 / TTHM: ~20,000\u201340,000 BV</li>",
+                      "</ul>",
+                      "<p style='margin:0 0 4px'><b>Months:</b> Direct service-life estimate ",
+                      "when pilot data or operating records are available.</p>",
+                      "<ul style='padding-left:16px;margin:2px 0 0'>",
+                      "<li>HAA5 / TTHM: typically 6\u201318 months</li>",
+                      "</ul>"
+                    )
+                  )
+                ),
                 radioButtons(
                   ns("carbon_life_type"),
                   label    = NULL,
                   choices  = c(
-                    "Bed Volumes"         = "bed_volumes",
-                    "Months"              = "months",
-                    "Freundlich Isotherm" = "freundlich"
+                    "Bed Volumes" = "bed_volumes",
+                    "Months"      = "months"
+                    # "Freundlich Isotherm" = "freundlich"  # not available for Other path
                   ),
                   selected = "bed_volumes",
                   inline   = TRUE
@@ -87,45 +133,55 @@ div(id = "loading-overlay",
                     min = 6, max = 12, value = 9, step = 1,
                     width = "100%"
                   )
-                ),
-                shiny::conditionalPanel(
-                  condition = "input['carbon_life_type'] == 'freundlich'",
-                  ns = ns,
-                  fluidRow(
-                    column(
-                      6,
-                      numericInput(
-                        ns("freund_kf"),
-                        HTML("K<sub>f</sub> \u2014 (\u00b5g/g)(L/\u00b5g)<sup>1/n</sup>"),
-                        value = NA_real_, min = 0,
-                        width = "100%"
-                      )
-                    ),
-                    column(
-                      6,
-                      numericInput(
-                        ns("freund_1_n"),
-                        "1/n (dimensionless)",
-                        value = NA_real_, min = 0, max = 1, step = 0.01,
-                        width = "100%"
-                      )
-                    )
-                  )
                 )
+                # Freundlich Isotherm inputs — commented out for Other path;
+                # available for named contaminants via standard_inputs.
+                # shiny::conditionalPanel(
+                #   condition = "input['carbon_life_type'] == 'freundlich'",
+                #   ns = ns,
+                #   fluidRow(
+                #     column(6, numericInput(ns("freund_kf"),
+                #       HTML("K<sub>f</sub> \u2014 (\u00b5g/g)(L/\u00b5g)<sup>1/n</sup>"),
+                #       value = NA_real_, min = 0, width = "100%")),
+                #     column(6, numericInput(ns("freund_1_n"),
+                #       "1/n (dimensionless)",
+                #       value = NA_real_, min = 0, max = 1, step = 0.01, width = "100%"))
+                #   )
+                # )
               ),
 
               # ── Contaminant Removal ─────────────────────────────────────────────
               tags$div(
                 style = "margin-top: 14px;",
-                tags$label("Contaminant Removal Input Type:", class = "control-label"),
+                tags$div(
+                  style = "display: flex; align-items: center; gap: 6px; margin-bottom: 4px;",
+                  tags$label("Contaminant Removal Input Type:", class = "control-label",
+                             style = "margin-bottom: 0;"),
+                  tags$i(
+                    class = "fa fa-info-circle",
+                    style = "color: #1a5276; cursor: pointer; font-size: 14px;",
+                    `data-toggle`    = "popover",
+                    `data-placement` = "right",
+                    `data-trigger`   = "click",
+                    `data-html`      = "true",
+                    `data-container` = "body",
+                    title = "Empty Bed Contact Time (EBCT)",
+                    `data-content`   = paste0(
+                      "<p style='margin:0 0 6px'>The theoretical time water spends passing ",
+                      "through the GAC bed if the bed were empty of media. Longer EBCT ",
+                      "provides greater treatment but requires larger or more vessels.</p>",
+                      "<ul style='padding-left:16px;margin:0'>",
+                      "<li>VOCs (TCE/PCE): typically 5\u201315 min</li>",
+                      "<li>HAA5: typically 7.5\u201315 min</li>",
+                      "<li>TTHM: typically 7.5\u201315 min</li>",
+                      "</ul>"
+                    )
+                  )
+                ),
                 radioButtons(
                   ns("removal_input_type"),
                   label    = NULL,
-                  choices  = c(
-                    "EBCT" = "ebct"
-                    # "Contaminant Removal %"              = "removal_pct",  # not yet implemented
-                    # "Influent & Effluent Concentrations" = "conc"           # not yet implemented
-                  ),
+                  choices  = c("EBCT" = "ebct"),
                   selected = "ebct",
                   inline   = TRUE
                 ),
@@ -139,105 +195,195 @@ div(id = "loading-overlay",
                     width = "100%"
                   )
                 )
-                # shiny::conditionalPanel(
-                #   condition = "input['removal_input_type'] == 'removal_pct'",
-                #   ns = ns,
-                #   numericInput(
-                #     ns("removal_pct"),
-                #     "Contaminant Removal (enter as fraction, e.g. 0.95)",
-                #     value = 0.95, min = 0, max = 1, step = 0.01,
-                #     width = "100%"
-                #   )
-                # ),
-                # shiny::conditionalPanel(
-                #   condition = "input['removal_input_type'] == 'conc'",
-                #   ns = ns,
-                #   fluidRow(
-                #     column(
-                #       6,
-                #       numericInput(
-                #         ns("C_0"),
-                #         "Influent Concentration (mg/L)",
-                #         value = NA_real_, min = 0,
-                #         width = "100%"
-                #       )
-                #     ),
-                #     column(
-                #       6,
-                #       numericInput(
-                #         ns("C_b"),
-                #         "Effluent Target (mg/L)",
-                #         value = NA_real_, min = 0,
-                #         width = "100%"
-                #       )
-                #     )
-                #   )
-                # )
               ),
 
               # ── System Parameters ───────────────────────────────────────────────
               tags$div(
                 style = "margin-top: 14px;",
+
+                # Contactors in series
+                tags$div(
+                  style = "display: flex; align-items: center; gap: 6px; margin-bottom: 2px;",
+                  tags$label("Min. Contactors in Series:", class = "control-label",
+                             style = "margin-bottom: 0;"),
+                  tags$i(
+                    class = "fa fa-info-circle",
+                    style = "color: #1a5276; cursor: pointer; font-size: 14px;",
+                    `data-toggle`    = "popover",
+                    `data-placement` = "right",
+                    `data-trigger`   = "click",
+                    `data-html`      = "true",
+                    `data-container` = "body",
+                    title = "Contactors in Series",
+                    `data-content`   = paste0(
+                      "<p style='margin:0 0 6px'>Number of GAC vessels that water flows through ",
+                      "sequentially within each treatment train. Series arrangement provides ",
+                      "lead\u2013lag operation, improving carbon utilization and providing a ",
+                      "compliance safety margin when the lead vessel is exhausted.</p>",
+                      "<ul style='padding-left:16px;margin:0'>",
+                      "<li><b>1 in series:</b> standard for most small systems and single-pass designs</li>",
+                      "<li><b>2 in series:</b> recommended for strict MCL compliance (e.g., VOCs, PFAS) ",
+                      "where breakthrough in the lead vessel must be caught before treated water leaves the plant</li>",
+                      "</ul>"
+                    )
+                  )
+                ),
                 numericInput(
                   ns("number_contactors_series"),
-                  "Min. Contactors in Series",
+                  label = NULL,
                   value = 1, min = 1, step = 1,
                   width = "100%"
                 ),
+
+                # Backwash interval
+                tags$div(
+                  style = "display: flex; align-items: center; gap: 6px; margin-bottom: 2px; margin-top: 10px;",
+                  tags$label("Interval Between Backwashes (hrs):", class = "control-label",
+                             style = "margin-bottom: 0;"),
+                  tags$i(
+                    class = "fa fa-info-circle",
+                    style = "color: #1a5276; cursor: pointer; font-size: 14px;",
+                    `data-toggle`    = "popover",
+                    `data-placement` = "right",
+                    `data-trigger`   = "click",
+                    `data-html`      = "true",
+                    `data-container` = "body",
+                    title = "Interval Between Backwashes",
+                    `data-content`   = paste0(
+                      "<p style='margin:0 0 6px'>Hours between periodic backwash cycles. ",
+                      "Backwashing removes suspended solids that accumulate and cause head loss; ",
+                      "it does <em>not</em> restore GAC adsorption capacity.</p>",
+                      "<p style='margin:0'>Typical range: 72\u2013168 hrs (3\u20137 days). ",
+                      "Shorter intervals are used when turbidity or suspended solids loading ",
+                      "is high.</p>"
+                    )
+                  )
+                ),
                 numericInput(
                   ns("backwash_interval"),
-                  "Interval Between Backwashes (hrs)",
+                  label = NULL,
                   value = 72, min = 1, step = 1,
                   width = "100%"
                 ),
+
+                # Spent Carbon Management
+                tags$div(
+                  style = "display: flex; align-items: center; gap: 6px; margin-bottom: 2px; margin-top: 10px;",
+                  tags$label("Spent Carbon Management:", class = "control-label",
+                             style = "margin-bottom: 0;"),
+                  tags$i(
+                    class = "fa fa-info-circle",
+                    style = "color: #1a5276; cursor: pointer; font-size: 14px;",
+                    `data-toggle`    = "popover",
+                    `data-placement` = "right",
+                    `data-trigger`   = "click",
+                    `data-html`      = "true",
+                    `data-container` = "body",
+                    title = "Spent Carbon Management",
+                    `data-content`   = paste0(
+                      "<p style='margin:0 0 6px'>How exhausted GAC is handled once treatment ",
+                      "capacity is depleted. Hazardous classification is determined by RCRA ",
+                      "regulations based on contaminant type and concentration.</p>",
+                      "<ul style='padding-left:16px;margin:0'>",
+                      "<li><b>Regeneration off-site (non-hazardous):</b> spent GAC is ",
+                      "thermally reactivated at a commercial facility and returned for reuse. ",
+                      "Appropriate for HAA5 and TTHM, where spent carbon is not a listed or ",
+                      "characteristic hazardous waste under RCRA.</li>",
+                      "<li><b>Regeneration off-site (hazardous):</b> same process but the ",
+                      "spent carbon qualifies as RCRA hazardous waste and requires a licensed ",
+                      "hazardous waste transporter and facility. Typical for chlorinated VOCs ",
+                      "(e.g., TCE, PCE) which are F-listed wastes.</li>",
+                      "<li><b>Throwaway (hazardous):</b> one-time disposal at a permitted ",
+                      "hazardous waste landfill without regeneration. May be cost-effective for ",
+                      "very small flows of chlorinated VOCs where carbon volume is low.</li>",
+                      "</ul>"
+                    )
+                  )
+                ),
                 selectInput(
                   ns("spent_carbon_managment"),
-                  "Spent Carbon Management",
+                  label = NULL,
                   choices = c(
-                    "regeneration on-site",
                     "regeneration off-site (non-hazardous)",
-                    "throwaway (non-hazardous)",
                     "regeneration off-site (hazardous)",
-                    "throwaway (hazardous)",
-                    "throwaway (radioactive)",
-                    "throwaway (radioactive hazardous)"
+                    "throwaway (hazardous)"
+                    # "regeneration on-site"            — not applicable for Other path
+                    # "throwaway (non-hazardous)"       — not applicable for Other path
+                    # "throwaway (radioactive)"         — not applicable for Other path
+                    # "throwaway (radioactive hazardous)"— not applicable for Other path
                   ),
                   selected = "regeneration off-site (non-hazardous)",
                   width = "100%"
                 ),
+
+                # Discharge Option for Spent Backwash
+                tags$div(
+                  style = "display: flex; align-items: center; gap: 6px; margin-bottom: 2px; margin-top: 10px;",
+                  tags$label("Discharge Option for Spent Backwash:", class = "control-label",
+                             style = "margin-bottom: 0;"),
+                  tags$i(
+                    class = "fa fa-info-circle",
+                    style = "color: #1a5276; cursor: pointer; font-size: 14px;",
+                    `data-toggle`    = "popover",
+                    `data-placement` = "right",
+                    `data-trigger`   = "click",
+                    `data-html`      = "true",
+                    `data-container` = "body",
+                    title = "Discharge Option for Spent Backwash",
+                    `data-content`   = paste0(
+                      "<p style='margin:0 0 6px'>Destination for backwash water generated during ",
+                      "periodic bed-cleaning cycles.</p>",
+                      "<p style='margin:0 0 6px'><b>POTW (Publicly Owned Treatment Works):</b> ",
+                      "Backwash is discharged to the local sewerage system under a pretreatment ",
+                      "permit. This is the standard disposal route for municipal GAC systems ",
+                      "treating VOCs, HAA5, or TTHM, as the concentrations in backwash water are ",
+                      "typically low enough to meet pretreatment standards.</p>",
+                      "<p style='margin:0'>Alternative discharge routes (surface water, recycle, ",
+                      "septic, evaporation pond) are not available in this simplified input mode.</p>"
+                    )
+                  )
+                ),
                 selectInput(
                   ns("residuals_disposal"),
-                  "Discharge Option for Spent Backwash",
-                  choices = c(
-                    "surface water",
-                    "POTW",
-                    "recycle",
-                    "septic system",
-                    "evaporation pond"
-                  ),
+                  label = NULL,
+                  choices = c("POTW"),
                   selected = "POTW",
                   width = "100%"
                 ),
-                # Characteristics of solids — only required when evaporation pond selected
-                shiny::conditionalPanel(
-                  condition = "input['residuals_disposal'] == 'evaporation pond'",
-                  ns = ns,
-                  selectInput(
-                    ns("solids_haz"),
-                    "Characteristics of Evaporation Pond Solids",
-                    choices = c(
-                      "non-hazardous",
-                      "hazardous",
-                      "radioactive",
-                      "radioactive hazardous"
-                    ),
-                    selected = "non-hazardous",
-                    width = "100%"
+
+                # GAC Transfer Method
+                tags$div(
+                  style = "display: flex; align-items: center; gap: 6px; margin-bottom: 2px; margin-top: 10px;",
+                  tags$label("GAC Transfer Method:", class = "control-label",
+                             style = "margin-bottom: 0;"),
+                  tags$i(
+                    class = "fa fa-info-circle",
+                    style = "color: #1a5276; cursor: pointer; font-size: 14px;",
+                    `data-toggle`    = "popover",
+                    `data-placement` = "right",
+                    `data-trigger`   = "click",
+                    `data-html`      = "true",
+                    `data-container` = "body",
+                    title = "GAC Transfer Method",
+                    `data-content`   = paste0(
+                      "<p style='margin:0 0 6px'>How spent or virgin GAC is moved into and out ",
+                      "of the contactors during changeout.</p>",
+                      "<ul style='padding-left:16px;margin:0'>",
+                      "<li><b>Manual transfer:</b> Carbon is sluiced or vacuum-transferred by ",
+                      "an operator using portable equipment. Standard for small systems ",
+                      "(\u22641 MGD) and the typical assumption for VOCs, HAA5, and TTHM at ",
+                      "small-to-medium flows. Lower capital cost but higher labor per event.</li>",
+                      "<li><b>Eductors:</b> Hydraulic eductors use water pressure to slurry ",
+                      "the carbon through fixed piping to a transport vessel. Preferred for ",
+                      "larger systems (generally \u22655 MGD) where frequent changeouts or high ",
+                      "carbon volumes make manual handling impractical.</li>",
+                      "</ul>"
+                    )
                   )
                 ),
                 selectInput(
                   ns("gac_transfer_method"),
-                  "GAC Transfer Method",
+                  label = NULL,
                   choices = c(
                     "manual transfer",
                     "eductors"
@@ -287,13 +433,19 @@ div(id = "loading-overlay",
         width = 12,
         
         div(class = "section-header", "Step 2: Design Type"),
-        
+
         selectInput(
           ns("design_type"),
           "Design Type",
           choices = c("", get_design_type()),
           selected = get_design_type()[1],
           width = "100%"
+        ),
+
+        tags$p(
+          style = "margin: 6px 0 0; font-size: 12px; color: #666; font-style: italic;",
+          tags$i(class = "fa fa-info-circle", style = "margin-right: 4px; color: #1a5276;"),
+          "Pressure vessel is the most widely used design type for GAC systems and has undergone the most extensive testing during development of this estimator. Gravity basin results should be reviewed carefully against workbook values before use."
         )
       ),
 

@@ -306,7 +306,7 @@ ui <- dashboardPage(
               tabsetPanel(
                 id = "tabs",
                 tabPanel("Potential Joining and Receiving Systems",        br(), DTOutput("results_table")),
-                tabPanel("Estimated Cost Chart",   br(), uiOutput("chart_controls_ui"), plotlyOutput("cost_chart", height = "360px")),
+                tabPanel("Estimated Cost Chart",   br(), plotlyOutput("cost_chart", height = "360px")),
                 tabPanel("Estimated Cost Summary", br(), uiOutput("cost_summary_ui"))
               )
             )
@@ -788,28 +788,6 @@ server <- function(input, output, session) {
   })
 
   # ── Cost chart controls ────────────────────────────────────────────────────
-  output$chart_controls_ui <- renderUI({
-    req(rv$costs, rv$selected_cons)
-    pairs   <- rv$costs %>% filter(pwsid == rv$selected_cons)
-    n_pairs <- length(unique(pairs$rec_pwsid))
-    if (n_pairs <= 1) return(NULL)
-
-    pair_choices <- pairs %>%
-      distinct(rec_pwsid, rec_pws_name) %>%
-      { setNames(.$rec_pwsid, .$rec_pws_name) }
-
-    div(
-      style = "display:flex; align-items:center; gap:20px; margin-bottom:6px;",
-      radioButtons("chart_view", NULL,
-                   choices  = c("All Pairs" = "all", "Single Pair" = "single"),
-                   selected = "all", inline = TRUE),
-      conditionalPanel(
-        condition = "input.chart_view === 'single'",
-        selectInput("chart_pair", NULL, choices = pair_choices, width = "280px")
-      )
-    )
-  })
-
   # ── Cost chart ─────────────────────────────────────────────────────────────
   output$cost_chart <- renderPlotly({
     req(rv$costs, rv$selected_cons, "total_project_cost" %in% names(rv$costs))
@@ -833,12 +811,8 @@ server <- function(input, output, session) {
       regional_multiplier  = "Regional Adj."
     )
 
-    view_mode <- if (!is.null(input$chart_view)) input$chart_view else "all"
-    pair_id   <- if (!is.null(input$chart_pair)) input$chart_pair else NULL
-
     plot_df <- rv$costs %>%
       filter(pwsid == rv$selected_cons) %>%
-      { if (view_mode == "single" && !is.null(pair_id)) filter(., rec_pwsid == pair_id) else . } %>%
       select(rec_pws_name, all_of(cost_cols)) %>%
       pivot_longer(-rec_pws_name, names_to = "component", values_to = "cost") %>%
       mutate(

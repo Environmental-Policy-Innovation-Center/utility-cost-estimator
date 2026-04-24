@@ -19,9 +19,9 @@ landingUI <- function(id) {
         ),
         h1("Identify water system consolidation candidates \u2014 before you plan."),
         p(
-          "A web-based tool for identifying joining and receiving systems + estimating",
-          "capital costs for physical consolidation. Designed for state agencies,",
-          "technical assistance providers, and utilities screening for consolidation options."
+          "A web-based tool for identifying joining & receiving systems. Quickly estimate",
+          "costs for physical consolidation. Designed for state agencies,",
+          "technical assistance providers, and utilities screening for physical consolidation options."
         ),
         div(
           class = "lp-hero-actions",
@@ -339,21 +339,21 @@ landingUI <- function(id) {
         class = "lp-footer-links",
         tags$a(
           href   = "https://www.epa.gov/ground-water-and-drinking-water/safe-drinking-water-information-system-sdwis-federal-reporting",
-          target = "_blank",
-          rel    = "noopener noreferrer",
+          target = "_blank", rel = "noopener noreferrer",
           "EPA SDWIS"
         ),
         tags$a(
           href   = "https://epictech.org",
-          target = "_blank",
-          rel    = "noopener noreferrer",
+          target = "_blank", rel = "noopener noreferrer",
           "EPIC-Tech"
         )
       ),
       p(
-        "Data: EPA Safe Drinking Water Information System (SDWIS) \u00b7 EPIC Engineering Cost Model",
+        "Built on EPA Safe Drinking Water Information System (SDWIS) & Service Area Boundaries (SABs) data \u00b7 Cost model developed by UCLA, Stanford, and EPIC.",
         tags$br(),
-        "This tool is developed by EPIC-Tech and is not an official EPA product."
+        "Powered by EPIC\u2019s National Drinking Water Explorer Dataset + Tool",
+        tags$br(),
+        "This tool is not an official EPA product. UCLA, Stanford and EPIC make no claims of accuracy. Please consult engineering services for more detailed costs."
       )
     )
   )

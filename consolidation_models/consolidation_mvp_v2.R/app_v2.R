@@ -82,7 +82,7 @@ load_state_data <- function(state) {
 filter_pairs <- function(neighbors, cons_cfg, rec_cfg) {
   neighbors %>%
     filter(!pwsid %in% c("090605121"), !rec_pwsid %in% c("090605121")) %>%
-    # ── Consolidating side ──
+    # ── Joining side ──
     filter(as.numeric(health_viols_10yr) >= cons_cfg$health_viols_10yr |
              is.na(as.numeric(health_viols_10yr))) %>%
     filter(open_health_viol          == cons_cfg$open_health_viol) %>%
@@ -303,8 +303,11 @@ ui <- dashboardPage(
 
             mainPanel(
               width = 9,
-              leafletOutput("map", height = "420px"),
-              uiOutput("pair_label_ui"),
+              div(
+                style = "position:relative;",
+                leafletOutput("map", height = "420px"),
+                uiOutput("pair_label_ui")
+              ),
               tabsetPanel(
                 id = "tabs",
                 tabPanel("Potential Joining and Receiving Systems",        br(), DTOutput("results_table")),
@@ -568,7 +571,7 @@ server <- function(input, output, session) {
       setProgress(1)
       shinyjs::delay(200, DT::selectRows(DT::dataTableProxy("results_table"), 1))
       showNotification(
-        sprintf("Done! %d pairs across %d consolidating systems.",
+        sprintf("Done! %d pairs across %d Joining systems.",
                 nrow(rv$costs), n_distinct(rv$costs$pwsid)),
         type = "message", duration = 5
       )
@@ -595,7 +598,7 @@ server <- function(input, output, session) {
     bb <- state_bbox[["CA"]]
     leaflet() %>%
       addMapPane("receiving",     zIndex = 410) %>%
-      addMapPane("consolidating", zIndex = 420) %>%
+      addMapPane("Joining", zIndex = 420) %>%
       addProviderTiles(providers$CartoDB.Positron) %>%
       fitBounds(bb[1], bb[2], bb[3], bb[4])
   })
@@ -645,14 +648,14 @@ server <- function(input, output, session) {
         data = cons_sf, group = "base",
         fillColor = "green", fillOpacity = 0.45,
         color = "darkgreen", weight = 1.5,
-        options = pathOptions(pane = "consolidating"),
+        options = pathOptions(pane = "Joining"),
         layerId = ~pwsid,
         popup = ~paste0(
           "<b>", pws_name, "</b><br>", pwsid,
           "<br>Pop: ", scales::comma(population_served_count),
           "<br>Owner: ", owner_type,
           "<br>Violations (10yr): ", health_viols_10yr,
-          "<br><i>Consolidating</i>"
+          "<br><i>Joining</i>"
         )
       ) %>%
       addPolygons(
@@ -671,7 +674,7 @@ server <- function(input, output, session) {
       ) %>%
       addLegend("bottomright",
                 colors  = c("green", "steelblue"),
-                labels  = c("Consolidating", "Receiving"),
+                labels  = c("Joining", "Receiving"),
                 opacity = 0.7) %>%
       fitBounds(bbox[[1]], bbox[[2]], bbox[[3]], bbox[[4]])
   })
@@ -707,7 +710,7 @@ server <- function(input, output, session) {
       filter(pwsid %in% partner_ids) %>%
       left_join(partner_info, by = c("pwsid" = "rec_pwsid"))
 
-    # Zoom to consolidating system only — receiving can be large and distorts view
+    # Zoom to Joining system only — receiving can be large and distorts view
     bbox <- st_bbox(sel_sf %>% select(geometry))
 
     leafletProxy("map") %>%
@@ -728,12 +731,12 @@ server <- function(input, output, session) {
         data = sel_sf, group = "highlight",
         fillColor = "#2ecc71", fillOpacity = 0.85,
         color = "#145a32", weight = 3,
-        options = pathOptions(pane = "consolidating"),
+        options = pathOptions(pane = "Joining"),
         popup = ~paste0(
           "<b>", pws_name, "</b><br>", pwsid,
           "<br>Pop: ", scales::comma(population_served_count),
           "<br>Owner: ", owner_type,
-          "<br><i>Consolidating (selected)</i>"
+          "<br><i>Joining (selected)</i>"
         )
       ) %>%
       fitBounds(bbox[[1]], bbox[[2]], bbox[[3]], bbox[[4]])
@@ -768,16 +771,21 @@ server <- function(input, output, session) {
     }
 
     div(
-      style = "display:flex; align-items:center; gap:24px; padding:6px 4px 8px 2px;",
+      style = "position:absolute; bottom:14px; left:50%; transform:translateX(-50%);
+               z-index:500; display:inline-flex; align-items:center; gap:16px;
+               background:rgba(255,255,255,0.78); backdrop-filter:blur(6px);
+               -webkit-backdrop-filter:blur(6px);
+               padding:7px 22px; border-radius:32px; white-space:nowrap;
+               box-shadow:0 2px 10px rgba(0,0,0,0.13);",
       tags$span(
-        style = "font-size:13px; font-weight:700; color:#1a6b2a; letter-spacing:0.01em;",
-        tags$span(style = "font-weight:400; color:#555; margin-right:4px;", "Joining:"),
+        style = "font-size:15px; font-weight:700; color:#1a6b2a;",
+        tags$span(style = "font-weight:500; color:#666; margin-right:5px;", "Joining:"),
         cons_name
       ),
-      tags$span(style = "color:#ccc;", "│"),
+      tags$span(style = "color:#ccc; font-size:15px;", "│"),
       tags$span(
-        style = "font-size:13px; font-weight:700; color:#1a3a6b; letter-spacing:0.01em;",
-        tags$span(style = "font-weight:400; color:#555; margin-right:4px;", "Receiving:"),
+        style = "font-size:15px; font-weight:700; color:#1a3a6b;",
+        tags$span(style = "font-weight:500; color:#666; margin-right:5px;", "Receiving:"),
         rec_name
       )
     )
@@ -813,7 +821,7 @@ server <- function(input, output, session) {
         "Travel Dist (mi)"   = rec_travel_distance,
         "Do they overlap?"            = rec_overlap,
         "Number of Service Connections"        = service_connections_count,
-        "Est. Consolidating Capital Costs"      = total_capital_costs,
+        "Est. Joining Capital Costs"      = total_capital_costs,
         "Est. Markup"             = total_markup
       ) %>%
       datatable(selection = "single", rownames = FALSE,

@@ -85,6 +85,7 @@ filter_pairs <- function(neighbors, cons_cfg, rec_cfg) {
     filter(as.numeric(health_viols_10yr) >= cons_cfg$health_viols_10yr |
              is.na(as.numeric(health_viols_10yr))) %>%
     filter(open_health_viol          == cons_cfg$open_health_viol) %>%
+    filter(population_served_count   >  0) %>%
     filter(population_served_count   <= cons_cfg$pop_served) %>%
     { if (cons_cfg$owner_type != "All") filter(., owner_type == cons_cfg$owner_type) else . } %>%
     # ── Receiving side ──
@@ -829,34 +830,45 @@ server <- function(input, output, session) {
 
     req(nrow(plot_df) > 0)
 
-    receivers <- unique(plot_df$rec_pws_name)
-    pal       <- c("#0a2540", "#1a5276", "#2471a3", "#5dade2", "#aed6f1",
-                   "#0e8a7d", "#17a589", "#d4a017", "#e59866", "#7d3c98")
-    colors    <- setNames(rep_len(pal, length(receivers)), receivers)
+    comp_pal <- c(
+      "New Source"     = "#0a2540",
+      "Pipeline"       = "#1a5276",
+      "Connections"    = "#2471a3",
+      "Service Lines"  = "#5dade2",
+      "Admin"          = "#aed6f1",
+      "Permits/CEQA"   = "#0e8a7d",
+      "Contingency"    = "#17a589",
+      "Planning & CM"  = "#d4a017",
+      "Engineering"    = "#e59866",
+      "Inflation"      = "#ca6f1e",
+      "Regional Adj."  = "#7d3c98"
+    )
 
     fig <- plot_ly()
-    for (rec in receivers) {
-      df_sub <- plot_df %>% filter(rec_pws_name == rec)
+    for (comp in levels(plot_df$label)) {
+      df_sub <- plot_df %>% filter(label == comp)
       fig <- fig %>% add_bars(
         data      = df_sub,
-        x         = ~label,
+        x         = ~rec_pws_name,
         y         = ~cost,
-        name      = rec,
-        marker    = list(color = colors[[rec]]),
-        text      = ~paste0(rec, "<br>", label, ": ", scales::dollar(cost)),
+        name      = comp,
+        marker    = list(color = comp_pal[[comp]]),
+        text      = ~paste0(rec_pws_name, "<br>", comp, ": ", scales::dollar(cost)),
         hoverinfo = "text"
       )
     }
 
-    fig %>% layout(
-      barmode       = "group",
-      xaxis         = list(title = "", tickangle = -35, tickfont = list(size = 9)),
-      yaxis         = list(title = "Cost", tickformat = "$,.0f"),
-      legend        = list(font = list(size = 10), orientation = "v"),
-      margin        = list(b = 80, r = 20, t = 10),
-      plot_bgcolor  = "white",
-      paper_bgcolor = "white"
-    )
+    fig %>%
+      layout(
+        barmode       = "stack",
+        xaxis         = list(title = "", tickangle = -35, tickfont = list(size = 9)),
+        yaxis         = list(title = "Cost", tickformat = "$,.0f"),
+        legend        = list(font = list(size = 10), orientation = "v"),
+        margin        = list(b = 100, r = 20, t = 10),
+        plot_bgcolor  = "white",
+        paper_bgcolor = "white"
+      ) %>%
+      config(displayModeBar = FALSE)
   })
 
   # ── Summary panel ──────────────────────────────────────────────────────────

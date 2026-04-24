@@ -81,6 +81,7 @@ load_state_data <- function(state) {
 
 filter_pairs <- function(neighbors, cons_cfg, rec_cfg) {
   neighbors %>%
+    filter(!pwsid %in% c("090605121"), !rec_pwsid %in% c("090605121")) %>%
     # ── Consolidating side ──
     filter(as.numeric(health_viols_10yr) >= cons_cfg$health_viols_10yr |
              is.na(as.numeric(health_viols_10yr))) %>%

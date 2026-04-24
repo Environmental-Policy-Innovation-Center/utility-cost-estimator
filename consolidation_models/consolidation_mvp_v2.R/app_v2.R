@@ -824,7 +824,7 @@ server <- function(input, output, session) {
       select(rec_pws_name, all_of(cost_cols)) %>%
       pivot_longer(-rec_pws_name, names_to = "component", values_to = "cost") %>%
       mutate(
-        label        = comp_labels[component],
+        label        = dplyr::recode(component, !!!comp_labels),
         label        = factor(label, levels = unname(comp_labels)),
         rec_pws_name = stringr::str_wrap(rec_pws_name, 25)
       )

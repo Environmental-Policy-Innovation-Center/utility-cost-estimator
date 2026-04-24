@@ -21,3 +21,13 @@ wbs_models/modules/WBSCompSelect.R
 wbs_models/gac_app/rsconnect/shinyapps.io/epic-tech/gac_app.dcf
 consolidation_modeles/.RData
 .Rproj.user
+wbs_models/gac_app/calculate_contactors_annotated.R
+wbs_models/gac_app/comments.R
+wbs_models/gac_app/granular-activated-carbon-gac.xlsm
+wbs_models/gac_app/www/.DS_Store
+wbs_models/gac_app/www/.Rhistory
+wbs_models/gac_app/test_wbs_comparison.R
+wbs_models/gac_app/wbs_comparison_results.csv
+wbs_models/gac_app/wbs_inputs_summary.csv
+.Rhistory
+.DS_Store

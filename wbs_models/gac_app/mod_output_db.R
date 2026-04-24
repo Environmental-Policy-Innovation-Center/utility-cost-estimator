@@ -128,7 +128,10 @@ outputDbUI <- function(id) {
     ### HIGH LEVEL SUMMARY -----
     with_anchor("anc-summary",
     fluidRow(
-      h1("Granular Activated Carbon (GAC)"),
+      tags$div(
+          class = "technology-header",
+          h1("Technology: Granular Activated Carbon (GAC)")
+      ),
       # Contaminant title
       uiOutput(ns("contaminant_title")),
       # Header Summary
@@ -268,16 +271,20 @@ outputDbServer <- function(id, results) {
     
 
     output$contaminant_title <- renderUI({
-      
-      params    <- output_db()$inputs
+
+      params <- output_db()$inputs
+
+      is_other <- isTRUE(tolower(trimws(as.character(params$contaminant %||% ""))) == "other")
+      custom_name <- trimws(as.character(params$cont_name %||% ""))
+      display_name <- if (is_other && nchar(custom_name) > 0)
+        paste0("Other — ", custom_name)
+      else
+        as.character(params$contaminant %||% "")
 
       tags$div(
-          class = "target-contaminant-header",
-          h2(paste0("Target Contaminant: ", params$contaminant))
+        class = "target-contaminant-header",
+        h2(paste0("Target Contaminant: ", display_name))
       )
-
-      
-      #browser()
     })
 
     # Helper function to build output_db structure from calculation results
@@ -304,11 +311,11 @@ outputDbServer <- function(id, results) {
       req(output_db())
       
       value <- if (!is.null(output_db()$capital_costs$total_direct)) {
-        scales::dollar(output_db()$capital_costs$total_direct)
+        scales::dollar(output_db()$capital_costs$total_direct, accuracy = 1)
       } else {
         "N/A"
       }
-      
+
       valueBox(
         value = value,
         subtitle = "Total Direct Capital Cost",
@@ -316,16 +323,16 @@ outputDbServer <- function(id, results) {
         color = "teal"
       )
     })
-    
+
     output$total_indirect_summary <- renderValueBox({
       req(output_db())
-      
+
       value <- if (!is.null(output_db()$capital_costs$total_indirect)) {
-        scales::dollar(output_db()$capital_costs$total_indirect)
+        scales::dollar(output_db()$capital_costs$total_indirect, accuracy = 1)
       } else {
         "N/A"
       }
-      
+
       valueBox(
         value = value,
         subtitle = "Total Indirect Cost",
@@ -333,17 +340,17 @@ outputDbServer <- function(id, results) {
         color = "teal"
       )
     })
-    
+
 
     output$total_add_on <- renderValueBox({
       req(output_db())
-      
+
       value <- if (!is.null(output_db()$capital_costs$addon_cost)) {
-        scales::dollar(output_db()$capital_costs$addon_cost)
+        scales::dollar(output_db()$capital_costs$addon_cost, accuracy = 1)
       } else {
         "N/A"
       }
-      
+
       valueBox(
         value = value,
         subtitle = "Add-on Cost",
@@ -354,13 +361,13 @@ outputDbServer <- function(id, results) {
 
     output$total_project_summary <- renderValueBox({
       req(output_db())
-      
+
       value <- if (!is.null(output_db()$capital_costs$total_project)) {
-        scales::dollar(output_db()$capital_costs$total_project)
+        scales::dollar(output_db()$capital_costs$total_project, accuracy = 1)
       } else {
         "N/A"
       }
-      
+
       valueBox(
         value = value,
         subtitle = "Grand Total Capital Cost",
@@ -368,12 +375,12 @@ outputDbServer <- function(id, results) {
         color = "green"
       )
     })
-    
+
     output$annualized_om_summary <- renderValueBox({
       req(output_db())
-      
+
       value <- if (!is.null(output_db()$om_costs$total_annual)) {
-        scales::dollar(output_db()$om_costs$total_annual)
+        scales::dollar(output_db()$om_costs$total_annual, accuracy = 1)
       } else {
         "N/A"
       }

@@ -180,15 +180,43 @@ get_standard_inputs <- function(contam_selection, design_type_idx, design_number
       janitor::clean_names()
   }
 
-  # Filter to get the matching row (before converting to character)
-  matching_row <- standard_inputs |>
-    dplyr::filter(
-      contaminant_selection == contam_selection,
-      design_type == design_type_idx,
-      design == design_number
-    )
+  # Filter to get the matching row (before converting to character).
+  # Primary match: all three keys (contaminant × design_type × design_number).
+  # Fallback match: contaminant × design_type only — used when design_number is
+  # empty (custom flow not in the predefined list) or when no exact row exists.
+  message(sprintf(
+    "[get_standard_inputs] contam=%s, design_type=%s, design_number=%s",
+    paste(contam_selection,  collapse = ","),
+    paste(design_type_idx,   collapse = ","),
+    paste(design_number,     collapse = ",")
+  ))
+
+  matching_row <- if (length(design_number) > 0 && length(contam_selection) > 0 &&
+                      length(design_type_idx) > 0) {
+    standard_inputs |>
+      dplyr::filter(
+        contaminant_selection == contam_selection,
+        design_type           == design_type_idx,
+        design                == design_number
+      )
+  } else {
+    data.frame()  # force fallback below
+  }
+
+  # Fallback: match on contaminant + design_type only
+  if (nrow(matching_row) == 0 && length(contam_selection) > 0 && length(design_type_idx) > 0) {
+    message(sprintf(
+      "[get_standard_inputs] no exact match — falling back to contam+design_type only"
+    ))
+    matching_row <- standard_inputs |>
+      dplyr::filter(
+        contaminant_selection == contam_selection,
+        design_type           == design_type_idx
+      )
+  }
 
   if (nrow(matching_row) == 0) {
+    message("[get_standard_inputs] no matching row found — returning NULL")
     return(NULL)
   }
 
@@ -426,8 +454,8 @@ calculate_bed_life <- function(ebct, K, n, C0, Cb) {
 #' @return Target bed depth in feet
 calculate_target_bed_depth <- function(design_flow_mgd, tank_geometry = "upright") {
   
-  # Default targets from Critical Design Assumptions sheet
-  target_bed_depth_under <- 4   # for flows <= 0.1 MGD
+  # Default targets from Critical Design Assumptions sheet (CDA C25/C26)
+  target_bed_depth_under <- 4   # for flows ≤ 0.1 MGD
   target_bed_depth_over <- 7    # for flows > 0.1 MGD
   target_bed_depth_horiz <- 8   # for horizontal vessels
   

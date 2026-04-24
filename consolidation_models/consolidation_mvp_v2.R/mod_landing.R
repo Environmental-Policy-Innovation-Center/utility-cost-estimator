@@ -55,7 +55,7 @@ landingUI <- function(id) {
           ),
           div(
             h3("EPA Data - powered by EPIC "),
-            p("Utilizing US EPA's Safe Drinking Water Information System and Water System Service Area Boundaries data. Powered by EPIC's National Drinking Water Explorer")
+            p("Utilizing US EPA's Safe Drinking Water Information System and Water System Service Area Boundaries data. Powered by EPIC's National Drinking Water Dataset + Tool.")
           )
         ),
 
@@ -77,7 +77,7 @@ landingUI <- function(id) {
           ),
           div(
             h3("Pre-Computed GIS-Powered Routing"),
-            p("Leverages euclidean and transit distance metrics for pipeline length estimates - across +44,000 water systems \u2014 pre-computed for rapid analysis")
+            p("Leverages euclidean and transit distance metrics for pipeline length estimates - across +44,000 water systems \u2014 pre-computed for rapid analysis.")
           )
         )
       )

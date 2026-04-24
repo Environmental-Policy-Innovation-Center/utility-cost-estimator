@@ -324,9 +324,13 @@ ui <- dashboardPage(
     tags$div(class = "app-footer",
       tags$span(class = "footer-icon", icon("droplet")),
       tags$span(
-        tags$span(class = "footer-label", "Source | "),
-        tags$span(class = "footer-source", "EPA SDWIS & EPIC Engineering Cost Model"),
-        tags$span(class = "footer-label", " | Water System Consolidation Estimator")
+        tags$span(class = "footer-label", "Data: "),
+        tags$a(class = "footer-source", href = "https://www.epa.gov/ground-water-and-drinking-water/safe-drinking-water-information-system-sdwis-federal-reporting", target = "_blank", rel = "noopener noreferrer", "EPA SDWIS"),
+        tags$span(class = "footer-label", " \u00b7 "),
+        tags$a(class = "footer-source", href = "https://www.epa.gov/ground-water-and-drinking-water/public-water-system-service-areas", target = "_blank", rel = "noopener noreferrer", "EPA SABs"),
+        tags$span(class = "footer-label", " \u00b7 "),
+        tags$a(class = "footer-source", href = "https://www.policyinnovation.org/drinking-water-explorer-tool", target = "_blank", rel = "noopener noreferrer", "National Drinking Water Explorer"),
+        tags$span(class = "footer-label", " \u00b7 Cost model: UCLA, Stanford & EPIC \u00b7 Not an official EPA product")
       )
     )
   )
@@ -832,7 +836,7 @@ server <- function(input, output, session) {
       ) %>%
       datatable(selection = "single", rownames = FALSE,
                 options = list(pageLength = 8, scrollX = TRUE, dom = "tip")) %>%
-      formatStyle("Est. Total Cost", color = "#d35400", fontWeight = "bold")
+      formatStyle("Est. Total Cost", color = "#ffb448", fontWeight = "bold")
   })
 
   observeEvent(input$results_table_rows_selected, {

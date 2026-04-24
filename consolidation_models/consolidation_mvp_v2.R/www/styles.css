@@ -199,6 +199,11 @@ label {
 .app-footer .footer-source {
   font-weight: 600;
   color: #5ce0d2;
+  text-decoration: none;
+}
+.app-footer .footer-source:hover {
+  text-decoration: underline;
+  color: #7eeee4;
 }
 
 /* ── Tool content area (sidebar + main) ── */

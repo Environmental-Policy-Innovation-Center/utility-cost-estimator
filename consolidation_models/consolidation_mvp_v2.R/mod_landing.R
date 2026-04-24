@@ -343,9 +343,14 @@ landingUI <- function(id) {
           "EPA SDWIS"
         ),
         tags$a(
-          href   = "https://epictech.org",
+          href   = "https://www.epa.gov/ground-water-and-drinking-water/public-water-system-service-areas",
           target = "_blank", rel = "noopener noreferrer",
-          "EPIC-Tech"
+          "EPA SABs"
+        ),
+        tags$a(
+          href   = "https://www.policyinnovation.org/drinking-water-explorer-tool",
+          target = "_blank", rel = "noopener noreferrer",
+          "National Drinking Water Explorer"
         )
       ),
       p(

@@ -469,7 +469,7 @@ server <- function(input, output, session) {
     div(class = "wizard-nav",
       if (s > 1) actionButton("btn_back", "\u2190 Back",   class = "btn-secondary btn-sm wizard-btn"),
       if (s < 3) actionButton("btn_next", "Next \u2192",   class = "btn-primary   btn-sm wizard-btn"),
-      if (s == 3) actionButton("btn_run", "Run Analysis",  class = "btn-danger    btn-sm wizard-btn")
+      if (s == 3) actionButton("btn_run", "Run Analysis",  class = "btn-warning   btn-sm wizard-btn")
     )
   })
 
@@ -807,25 +807,32 @@ server <- function(input, output, session) {
   output$results_table <- renderDT({
     req(selected_pairs_df())
     selected_pairs_df() %>%
+      select(
+        pwsid, pws_name, rec_pwsid, rec_pws_name,
+        total_project_cost,
+        rec_centroid_distance, rec_travel_distance, rec_overlap,
+        service_connections_count, total_capital_costs, total_markup
+      ) %>%
       mutate(
         across(c(total_capital_costs, total_markup, total_project_cost), dollar),
         across(c(rec_centroid_distance, rec_travel_distance), ~round(., 2))
       ) %>%
       rename(
-        "Joining System ID"        = pwsid,
-        "Joining System Name"         = pws_name,
-        "Receving System ID"         = rec_pwsid,
+        "Joining System ID"              = pwsid,
+        "Joining System Name"            = pws_name,
+        "Receiving System ID"            = rec_pwsid,
         "Receiving System Name"          = rec_pws_name,
-        "Est. Total Cost"         = total_project_cost,
+        "Est. Total Cost"                = total_project_cost,
         "Distance Center to Center (mi)" = rec_centroid_distance,
-        "Travel Dist (mi)"   = rec_travel_distance,
-        "Do they overlap?"            = rec_overlap,
-        "Number of Service Connections"        = service_connections_count,
-        "Est. Joining Capital Costs"      = total_capital_costs,
-        "Est. Markup"             = total_markup
+        "Travel Dist (mi)"               = rec_travel_distance,
+        "Overlap?"                       = rec_overlap,
+        "Service Connections"            = service_connections_count,
+        "Est. Capital Costs"             = total_capital_costs,
+        "Est. Markup"                    = total_markup
       ) %>%
       datatable(selection = "single", rownames = FALSE,
-                options = list(pageLength = 8, scrollX = TRUE, dom = "tip"))
+                options = list(pageLength = 8, scrollX = TRUE, dom = "tip")) %>%
+      formatStyle("Est. Total Cost", color = "#d35400", fontWeight = "bold")
   })
 
   observeEvent(input$results_table_rows_selected, {

@@ -304,7 +304,7 @@ ui <- dashboardPage(
             mainPanel(
               width = 9,
               leafletOutput("map", height = "420px"),
-              br(),
+              uiOutput("pair_label_ui"),
               tabsetPanel(
                 id = "tabs",
                 tabPanel("Potential Joining and Receiving Systems",        br(), DTOutput("results_table")),
@@ -747,6 +747,40 @@ server <- function(input, output, session) {
       rv$selected_cons <- id
       rv$selected_pair <- NULL
     }
+  })
+
+  # ── Pair selection label ───────────────────────────────────────────────────
+  output$pair_label_ui <- renderUI({
+    req(rv$costs, rv$selected_cons)
+
+    cons_name <- rv$costs %>%
+      filter(pwsid == rv$selected_cons) %>%
+      slice(1) %>%
+      pull(pws_name)
+
+    rec_name <- if (!is.null(rv$selected_pair)) {
+      rv$costs %>%
+        filter(pwsid == rv$selected_cons, rec_pwsid == rv$selected_pair) %>%
+        slice(1) %>%
+        pull(rec_pws_name)
+    } else {
+      "—"
+    }
+
+    div(
+      style = "display:flex; align-items:center; gap:24px; padding:6px 4px 8px 2px;",
+      tags$span(
+        style = "font-size:13px; font-weight:700; color:#1a6b2a; letter-spacing:0.01em;",
+        tags$span(style = "font-weight:400; color:#555; margin-right:4px;", "Joining:"),
+        cons_name
+      ),
+      tags$span(style = "color:#ccc;", "│"),
+      tags$span(
+        style = "font-size:13px; font-weight:700; color:#1a3a6b; letter-spacing:0.01em;",
+        tags$span(style = "font-weight:400; color:#555; margin-right:4px;", "Receiving:"),
+        rec_name
+      )
+    )
   })
 
   # ── Results table ──────────────────────────────────────────────────────────

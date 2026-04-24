@@ -33,13 +33,13 @@ get_assumption <- function(data, name, default = NA_real_) {
 # Core WBS calculation functions for GAC system design and costing.
 #
 # Each function mirrors one or more sheets of the EPA WBS GAC workbook
-# (granular-activated-carbon-gac.xlsm, March 2023).  Workbook sheet
-# abbreviations used throughout this file:
+# (granular-activated-carbon-gac.xlsm, March 2023).  
+# Workbook sheet abbreviations used throughout this file:
 #
 #   AutoSize  AutoSize sheet (VBA geometry search + candidate evaluation)
 #   B&R       Backwash and Regeneration
 #   CC        Contactor Constraints
-#   CDA       Critical Design Assumptions
+#   CDA       Critical Design Assumptions ✓
 #   CE        Cost Equations  (cost coefficient polynomial equations)
 #   CD        Cost Data       (VLOOKUP tables)
 #   IC        Instrumentation and Control
@@ -1282,26 +1282,29 @@ calculate_tanks <- function(design_flow, no_backwash, no_backwash_tank,
   }
   
   if (needs_holding_tank) {
-    
-    # Calculate residuals volume
-    # Simplified: volume generated per backwash cycle
-    # Assume 2% of daily flow as residuals
-    residuals_per_cycle <- design_flow * 1000000 * 0.02
-    
-    # Storage capacity factor (days of storage)
-    storage_days <- 1  # Typical: 1 day storage
-    
-    # Total residuals volume
-    res_cap_factor <- 1.2  # Safety factor
-    total_res_vol <- residuals_per_cycle * storage_days * res_cap_factor
-    
-    # Max holding tank size
+
+    # Workbook RM sizing: htank_vol = res_cap_factor × (water_flush × backwash_time)
+    #   water_flush  = h2oflush_backwash_rate (CDA C61 = 12 gpm/ft²) × vessel_SA
+    #   backwash_time = CDA C62 = 10 minutes
+    #   res_cap_factor = CDA C193 = 2
+    # Verified: Carbon Tetrachloride n=1 d=4.0 ft → SA=12.57 ft²
+    #   → water_flush = 12 × 12.57 = 150.8 gpm → res_vol = 151 × 10 = 1,508 gal
+    #   → htank = 2 × 1,508 = 3,016 ≈ 3,020 gal (workbook value) ✓
+    h2oflush_rate_tanks <- 12      # gpm/ft² (CDA C61)
+    backwash_time_tanks  <- 10     # minutes  (CDA C62)
+    res_cap_factor_tanks <- 2      # CDA C193
+    sa_for_tank <- if (!is.null(vessel_sa) && is.numeric(vessel_sa) && vessel_sa > 0)
+      vessel_sa else (design_flow * 1e6 / 1440) / max(1, num_contactors) / 5  # fallback
+    res_vol_per_event <- h2oflush_rate_tanks * sa_for_tank * backwash_time_tanks  # gal
+    total_res_vol     <- res_cap_factor_tanks * res_vol_per_event
+
+    # Max holding tank size (workbook RM C193 / CD lookup)
     max_htank_size <- if (design_flow < 1) 8000 else 12000
-    
+
     # Calculate number of holding tanks
     num_residuals_tanks <- ceiling(total_res_vol / max_htank_size)
     num_residuals_tanks <- max(1, num_residuals_tanks)
-    
+
     # Volume per tank
     residuals_tank_volume <- total_res_vol / num_residuals_tanks
     
@@ -1407,22 +1410,26 @@ calculate_tanks <- function(design_flow, no_backwash, no_backwash_tank,
 #'   - Pipe lengths = multiplier * facil_length
 #'   - facil_length = ROUNDUP(sqrt(total_fp), -1)  [passed in or estimated]
 calculate_piping_valves <- function(
-                                    num_contactors, 
-                                    num_trains, 
-                                    automation_level, 
-                                    design_flow_mgd = 1, 
-                                    component_level = 1, 
-                                    no_backwash = FALSE, 
-                                    facil_length = NULL,  
-                                    backwash_rate_gpm = NULL, 
-                                    vessel_diameter, 
-                                    vessel_length, 
-                                    tank_geometry, 
-                                    params = list(), 
+                                    num_contactors,
+                                    num_trains,
+                                    automation_level,
+                                    design_flow_mgd = 1,
+                                    component_level = 1,
+                                    no_backwash = FALSE,
+                                    facil_length = NULL,
+                                    backwash_rate_gpm = NULL,
+                                    vessel_diameter,
+                                    vessel_length,
+                                    tank_geometry,
+                                    params = list(),
                                     tanks = list(),
-                                    backwash_pumps    = 0,  
-                                    num_back_tanks    = 0,   
-                                    num_booster_pumps = 0) { 
+                                    backwash_pumps    = 0,
+                                    num_back_tanks    = 0,
+                                    num_booster_pumps = 0,
+                                    # Explicit residuals pump count from calculate_pumps result.
+                                    # When provided, takes precedence over tanks$residuals_pumps
+                                    # (which is always NULL/0 since calculate_tanks does not size pumps).
+                                    residuals_pumps_actual = NULL) { 
 
   # Ensure numeric parameters
   num_contactors  <- safe_as_numeric(num_contactors,  1)
@@ -1741,7 +1748,10 @@ calculate_piping_valves <- function(
       backwash_pumps    = backwash_pumps,
       num_back_tanks    = num_back_tanks,
       num_booster_pumps = num_booster_pumps,
-      res_pumps      = tanks$residuals_pumps  %||% 0,
+      # Prefer explicitly-passed residuals pump count (from calculate_pumps result).
+      # tanks$residuals_pumps is always NULL/0 — calculate_tanks does not size pumps.
+      res_pumps      = if (!is.null(residuals_pumps_actual)) residuals_pumps_actual
+                       else tanks$residuals_pumps %||% 0,
       res_hold_tanks = (tanks$num_residuals_tanks %||% 0) +
                        (tanks$num_residuals_basins %||% 0),
       res_pipe_diam  = if (is.na(res_pipe_diam)) 0 else res_pipe_diam,
@@ -1996,10 +2006,13 @@ calculate_controls <- function(automation_level, num_contactors, num_trains, man
   tot_fm_proc <- 0L
   proc_meter_size <- proc_pipe_diam
 
-  # ── 6.3 tot_fm_back (CDA C108 = 1, conditioned on new backwash) ───────────
-  # Workbook: backwash FM only installed when new backwash pumps are present.
-  # When backwash_pumps = 0 (existing supply or small-system default), no new meter.
-  tot_fm_back <- if (backwash_pumps > 0) 1L else 0L
+  # ── 6.3 tot_fm_back (CDA C108 = 1) ────────────────────────────────────────
+  # Backwash FM measures flow through the vessel during backwash events — present
+  # even when existing pumps supply the backwash water (no_backwash = 1).
+  # Exception: add-on systems attach to existing infrastructure and get no new FM.
+  # Workbook confirmed: Carbon Tetrachloride (non-add-on) has 6.3.1 at 4" despite
+  # using the small-system existing-supply default (no new backwash pumps).
+  tot_fm_back <- if (add_on == 1) 0L else 1L
   back_meter_size <- back_pipe_diam
 
   # ── 6.4 tot_fm_res (CDA C210 = 1) ─────────────────────────────────────────
@@ -3723,7 +3736,16 @@ calculate_gac_system <- function(params) {
     as.numeric(convert_flow(params$average_flow, from = params$average_flow_units, to = "MGD")),
     error = function(e) as.numeric(params$average_flow)
   )
-  if (is.null(average_flow_mgd) || is.na(average_flow_mgd)) average_flow_mgd <- design_flow_mgd * 0.3
+  # Average flow fallback: interpolate from the EPA WBS standard_inputs lookup table.
+  # These exact pairs come from the design_flow_I / average_flow_I columns:
+  #   0.030 → 0.007,  0.124 → 0.035,  0.305 → 0.094,  0.740 → 0.251,
+  #   2.152 → 0.819,  7.365 → 3.200,  22.614 → 11.066, 75.072 → 37.536
+  if (is.null(average_flow_mgd) || is.na(average_flow_mgd)) {
+    .af_df <- c(0.030, 0.124, 0.305, 0.740, 2.152, 7.365, 22.614, 75.072)
+    .af_af <- c(0.007, 0.035, 0.094, 0.251, 0.819, 3.200, 11.066, 37.536)
+    .idx   <- which.min(abs(.af_df - design_flow_mgd))
+    average_flow_mgd <- .af_af[.idx]
+  }
   
   # ===== AutoSize Calculations =====
   # Calculate bed depth and vessel dimensions if not provided or if use_autosize is enabled
@@ -4046,9 +4068,10 @@ calculate_gac_system <- function(params) {
             facil_length = facil_len_c,               # ← per-n facility length
             vessel_diameter = p$vessel_diameter, vessel_length = p$vessel_height_length,
             tank_geometry = p$tank_geometry, params = p, tanks = tnk_r,
-            backwash_pumps = pmp_r$backwash_pumps %||% 0,
-            num_back_tanks = tnk_r$num_back_tanks %||% 0,
-            num_booster_pumps = pmp_r$booster_pumps %||% 0
+            backwash_pumps    = pmp_r$backwash_pumps %||% 0,
+            num_back_tanks    = tnk_r$num_back_tanks %||% 0,
+            num_booster_pumps = pmp_r$booster_pumps  %||% 0,
+            residuals_pumps_actual = pmp_r$residuals_pumps %||% 0
           )
 
           # controls
@@ -4322,14 +4345,18 @@ calculate_gac_system <- function(params) {
                       flow_num, target_bd,
                       if (flow_num <= 0.1) "target_bed_depth_under (≤0.1 MGD)" else "target_bed_depth_over (>0.1 MGD)"))
 
-      #TODO
-      # min_diam: minimum standard pressure vessel diameter.
-      # The correct workbook default is 3.5 ft — the smallest commercially
-      # pre-fabricated FG/CSP vessel used in the WBS model.
-      # This drives comp_min_d (AutoSize C88) which clamps small raw_d values
-      # upward, ensuring both PFAS and UVAOP Quench (add-on) are sized at 3.5 ft
-      # when target_bd=7 produces a raw_d below 3.5 ft.
-      min_diam <- get_assumption(critical_assumptions, "min_diam", 3.5)
+      # min_diam: minimum standard pressure vessel diameter for the AutoSize
+      # geometry clamp (AutoSize C88: comp_min_d).
+      #
+      # These are literal workbook constants, not CDA-backed values:
+      #   flow > 0.1 MGD  → 3.5 ft  (smallest pre-fabricated FG/CSP vessel;
+      #                               PFAS 0.124 MGD workbook-verified)
+      #   flow ≤ 0.1 MGD  → 1.5 ft  (smallest diameter in vessel_min_h / vessel_max_h
+      #                               tables defined below; at small flows 3.5 ft forces
+      #                               vessels too short to satisfy vessel_min_h, falling
+      #                               through to the hardcoded n=1/1.5ft/2ft default
+      #                               instead of the workbook-correct n=2/2ft/3.4ft)
+      min_diam <- if (flow_num <= 0.1) 1.5 else 3.5
       max_diam_upright <- get_assumption(critical_assumptions, "max_diam_override", 14)   # workbook max_diam CDA C18/CC C24  [GA] 
       
       min_bd   <- get_assumption(critical_assumptions, "min_bed_depth", 2) 
@@ -4421,12 +4448,18 @@ calculate_gac_system <- function(params) {
           # NRD_small_1=1 (CDA C9), NRD_small=0 (CDA C10), redund_freq=4 (CDA C16)
           # op_num_tanks = num_treat_lines × num_contactors_in_series
           #
-          # Add-on exception: add-on systems have NRD=0 regardless of size —
-          # they attach to an existing system that provides inherent redundancy.
-          # Workbook confirms: UVAOP Quench (add-on) shows total contactors = 1 (NRD=0).
+          # CRITICAL: when NRD_I is explicitly set in standard_inputs, the workbook
+          # uses that fixed value for ALL n candidates (not just op_tanks=1).
+          # Example: Carbon Tetrachloride NRD_I=1 → n=2 gets total=3 vessels, not 2,
+          # making n=1 the cost-optimal choice — matching the workbook AutoSize result.
+          #
+          # Add-on exception: add-on systems have NRD=0 regardless of NRD_I.
           op_num_tanks_try <- as.integer(n_try) * as.integer(num_series)
+          nrd_i_explicit   <- suppressWarnings(as.integer(params$redundancy))
           pv_nrd <- if (is_addon) {
             0L  # add-on: no standby vessel required
+          } else if (!is.na(nrd_i_explicit) && nrd_i_explicit >= 0) {
+            nrd_i_explicit  # NRD_I explicitly set → honour it for every n (workbook CC C34)
           } else if (design_flow_mgd >= 1) {
             as.integer(ceiling(n_try / redund_freq))  # large: ROUNDUP(n/4, 0)
           } else {
@@ -4482,6 +4515,20 @@ calculate_gac_system <- function(params) {
             BV_definition = p$BV_definition %||% "EBCT per vessel",
             Num_tanks = num_series
           )
+          # Override initial fill to include ALL vessels (operating + NRD standby).
+          # Mirrors the final-calculation path (line ~5158): fill_vol = vol_per × total_contactors.
+          # calc_ann_pv calls calculate_gac_requirements with operating volume only,
+          # so WBS 9.1 (initial fill) would otherwise exclude the NRD vessel for n=1.
+          {
+            fill_vol_all <- con_r$gac_volume_per_contactor * con_r$total_contactors
+            fill_dens    <- p$GAC_density %||% 30
+            fill_mass    <- fill_vol_all * fill_dens
+            fill_D       <- min(fill_mass, 40000)
+            fill_uc_all  <- if (fill_D == 0) 0 else 2.101628083 * exp(-5.637e-06 * fill_D)
+            gac_r$total_gac_mass_lb_fill <- fill_mass
+            gac_r$gac_unit_cost          <- fill_uc_all
+            gac_r$initial_fill_cost      <- fill_mass * fill_uc_all
+          }
           {
             wfgpm_p <- round(12 * pi * (actual_d / 2)^2, 0)
             res_ts_p <- tolower(trimws(as.character(p$residuals_tank %||% "no holding tank")))
@@ -4512,9 +4559,10 @@ calculate_gac_system <- function(params) {
             component_level = 1, no_backwash = p$no_backwash, facil_length = NULL,
             vessel_diameter = actual_d, vessel_length = actual_h,
             tank_geometry = p$tank_geometry, params = p, tanks = tnk_r,
-            backwash_pumps = pmp_r$backwash_pumps %||% 0,
-            num_back_tanks = tnk_r$num_back_tanks %||% 0,
-            num_booster_pumps = pmp_r$booster_pumps %||% 0
+            backwash_pumps    = pmp_r$backwash_pumps %||% 0,
+            num_back_tanks    = tnk_r$num_back_tanks %||% 0,
+            num_booster_pumps = pmp_r$booster_pumps  %||% 0,
+            residuals_pumps_actual = pmp_r$residuals_pumps %||% 0
           )
           ctl_r <- calculate_controls(
             automation_level = p$automation_level, num_contactors = con_r$total_contactors,
@@ -4666,7 +4714,28 @@ calculate_gac_system <- function(params) {
 
           # OUTPUT C417: annualized_cost = total_project × CRF + total_annual_OM
           # CRF is computed per-candidate using the candidate's own useful_life (ul_p).
-          list(ann = cap_r$total_project * crf_used + om_r$total_annual, valid = TRUE)
+          list(
+            ann    = cap_r$total_project * crf_used + om_r$total_annual,
+            valid  = TRUE,
+            detail = list(
+              vessels     = con_r$total_cost,
+              pumps       = pmp_r$total_cost,
+              tanks       = tnk_r$total_cost,
+              valves      = pip_r$valve_cost %||% 0,
+              controls    = ctl_r$total_cost,
+              piping_mat  = pip_r$piping_material_cost %||% pip_r$piping_cost,
+              piping_inst = pip_r$piping_installation_cost %||% 0,
+              site        = sit_r$site_work_cost %||% 0,
+              building    = sit_r$building_cost %||% 0,
+              gac_fill    = gac_r$initial_fill_cost %||% 0,
+              indirect    = cap_r$total_indirect,
+              addon       = cap_r$addon_cost,
+              total_project = cap_r$total_project,
+              crf         = crf_used,
+              ul          = ul_p,
+              om          = om_r$total_annual
+            )
+          )
 
         }),
         error = function(e) {
@@ -4762,9 +4831,12 @@ calculate_gac_system <- function(params) {
                         (1 + bed_expansion) * actual_bd + freeboard, actual_h))
 
         # Mirror the NRD formula used inside calc_ann_pv (CC C34) for debug logging
-        dbg_op_tanks <- as.integer(n_try) * as.integer(num_series)
+        dbg_op_tanks     <- as.integer(n_try) * as.integer(num_series)
+        dbg_nrd_explicit <- suppressWarnings(as.integer(params$redundancy))
         dbg_nrd <- if (is_addon) {
           0L
+        } else if (!is.na(dbg_nrd_explicit) && dbg_nrd_explicit >= 0) {
+          dbg_nrd_explicit
         } else if (design_flow_mgd >= 1) {
           as.integer(ceiling(n_try / redund_freq))
         } else {
@@ -4790,6 +4862,18 @@ calculate_gac_system <- function(params) {
         ann <- cost_r$ann
 
         # --- AUTOSIZE COST DEBUG START ---
+        # Per-candidate cost breakdown to diagnose n=1 vs n=2 selection
+        if (!is.null(cost_r$detail)) {
+          d <- cost_r$detail
+          message(sprintf("[COST_DETAIL] n=%d | vessels=$%.0f | pumps=$%.0f | tanks=$%.0f | valves=$%.0f | controls=$%.0f | piping_mat=$%.0f | piping_inst=$%.0f | site=$%.0f | bldg=$%.0f | GAC_fill=$%.0f | indirect=$%.0f | addon=$%.0f | total_project=$%.0f | CRF=%.4f | OM=$%.0f | ann=$%.0f",
+                          n_try,
+                          d$vessels %||% 0, d$pumps %||% 0, d$tanks %||% 0,
+                          d$valves %||% 0, d$controls %||% 0,
+                          d$piping_mat %||% 0, d$piping_inst %||% 0,
+                          d$site %||% 0, d$building %||% 0, d$gac_fill %||% 0,
+                          d$indirect %||% 0, d$addon %||% 0, d$total_project %||% 0,
+                          d$crf %||% 0, d$om %||% 0, ann))
+        }
         message(sprintf("[AUTOSIZE_DEBUG] n=%d | ann=$%.2f | best_ann=$%.2f | steps_past=%d | %s",
                         n_try, ann, best_ann, steps_past,
                         if (ann < best_ann) "*** NEW BEST ***" else sprintf("worse by $%.2f", ann - best_ann)))
@@ -5206,14 +5290,15 @@ calculate_gac_system <- function(params) {
     component_level = 1,
     no_backwash     = params$no_backwash,
     facil_length    = NULL,
-    vessel_diameter = params$vessel_diameter,     
-    vessel_length   = params$vessel_height_length, 
+    vessel_diameter = params$vessel_diameter,
+    vessel_length   = params$vessel_height_length,
     tank_geometry   = params$tank_geometry,
-    params          = params,        
+    params          = params,
     tanks           = tank_results,
-    backwash_pumps    = pump_results$backwash_pumps    %||% 0,
-    num_back_tanks    = tank_results$num_back_tanks    %||% 0,  
-    num_booster_pumps = pump_results$booster_pumps     %||% 0      
+    backwash_pumps         = pump_results$backwash_pumps  %||% 0,
+    num_back_tanks         = tank_results$num_back_tanks  %||% 0,
+    num_booster_pumps      = pump_results$booster_pumps   %||% 0,
+    residuals_pumps_actual = pump_results$residuals_pumps %||% 0
   )
   
   # Calculate instrumentation and controls

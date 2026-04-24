@@ -637,10 +637,16 @@ inputsServer <- function(id) {
         # Fetch standard inputs from Google Sheets
         tryCatch({
           
+          # Numeric-safe design_number lookup: convert sheet values to numeric before
+          # comparing so that character "0.030" matches numeric 0.03 correctly.
           std_inputs <- get_standard_inputs(
             contam_selection = which(get_contam_type() == input$contam_I),
             design_type = which(get_design_type() == input$design_type),
-            design_number = which(get_design_number() == as.numeric(input$design_flow_I))
+            design_number = {
+              dn_vals <- suppressWarnings(as.numeric(get_design_number()))
+              df_val  <- suppressWarnings(as.numeric(input$design_flow_I))
+              which(abs(dn_vals - df_val) < 1e-9)
+            }
           )
           
           if (!is.null(std_inputs)) {

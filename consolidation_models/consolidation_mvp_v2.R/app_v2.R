@@ -307,7 +307,7 @@ ui <- dashboardPage(
               tabsetPanel(
                 id = "tabs",
                 tabPanel("Potential Joining and Receiving Systems",        br(), DTOutput("results_table")),
-                tabPanel("Estimated Cost Chart",   br(), plotlyOutput("cost_chart", height = "360px")),
+                tabPanel("Estimated Cost Chart",   br(), plotlyOutput("cost_chart", height = "432px")),
                 tabPanel("Estimated Cost Summary", br(), uiOutput("cost_summary_ui"))
               )
             )
@@ -820,6 +820,7 @@ server <- function(input, output, session) {
 
     plot_df <- rv$costs %>%
       filter(pwsid == rv$selected_cons) %>%
+      distinct(rec_pwsid, .keep_all = TRUE) %>%
       select(rec_pws_name, all_of(cost_cols)) %>%
       pivot_longer(-rec_pws_name, names_to = "component", values_to = "cost") %>%
       mutate(
@@ -861,9 +862,9 @@ server <- function(input, output, session) {
     fig %>%
       layout(
         barmode       = "stack",
-        xaxis         = list(title = "", tickangle = -35, tickfont = list(size = 9)),
-        yaxis         = list(title = "Cost", tickformat = "$,.0f"),
-        legend        = list(font = list(size = 10), orientation = "v"),
+        xaxis         = list(title = "", tickangle = -35, tickfont = list(size = 12)),
+        yaxis         = list(title = "Cost", tickformat = "$,.0f", tickfont = list(size = 12)),
+        legend        = list(font = list(size = 12), orientation = "v"),
         margin        = list(b = 100, r = 20, t = 10),
         plot_bgcolor  = "white",
         paper_bgcolor = "white"

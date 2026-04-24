@@ -396,10 +396,11 @@ server <- function(input, output, session) {
           engineering_services_const = 0.15, inflation_const = 0.031,
           regional_multiplier_const = 0.10
         )
-        rv$selected_cons <- unique(rv$costs$pwsid)[1]
-        rv$selected_pair <- NULL
+        rv$selected_cons <- rv$costs$pwsid[1]
+        rv$selected_pair <- rv$costs$rec_pwsid[1]
         setProgress(1)
         goto_step(3)
+        shinyjs::delay(200, DT::selectRows(DT::dataTableProxy("results_table"), 1))
         showNotification(
           sprintf("Example loaded: %d pairs across %d systems in CA.",
                   nrow(rv$costs), n_distinct(rv$costs$pwsid)),
@@ -560,9 +561,10 @@ server <- function(input, output, session) {
         inflation_const            = input$inflation         / 100,
         regional_multiplier_const  = input$regional          / 100
       )
-      rv$selected_cons <- unique(rv$costs$pwsid)[1]
-      rv$selected_pair <- NULL
+      rv$selected_cons <- rv$costs$pwsid[1]
+      rv$selected_pair <- rv$costs$rec_pwsid[1]
       setProgress(1)
+      shinyjs::delay(200, DT::selectRows(DT::dataTableProxy("results_table"), 1))
       showNotification(
         sprintf("Done! %d pairs across %d consolidating systems.",
                 nrow(rv$costs), n_distinct(rv$costs$pwsid)),
@@ -686,10 +688,15 @@ server <- function(input, output, session) {
       filter(pwsid == sel_id) %>%
       left_join(sel_info, by = "pwsid")
 
-    partner_ids <- costs %>% filter(pwsid == sel_id) %>% pull(rec_pwsid) %>% unique()
+    # When a specific pair is selected show only that receiver, else all partners
+    partner_ids <- if (!is.null(rv$selected_pair)) {
+      rv$selected_pair
+    } else {
+      costs %>% filter(pwsid == sel_id) %>% pull(rec_pwsid) %>% unique()
+    }
 
     partner_info <- costs %>%
-      filter(pwsid == sel_id) %>%
+      filter(pwsid == sel_id, rec_pwsid %in% partner_ids) %>%
       distinct(rec_pwsid, rec_pws_name, rec_population_served_count,
                rec_owner_type, rec_health_viols_10yr)
 
@@ -698,8 +705,8 @@ server <- function(input, output, session) {
       left_join(partner_info, by = c("pwsid" = "rec_pwsid"))
 
     bbox <- st_bbox(bind_rows(
-      sel_sf     %>% select(geometry)#,
-     # partner_sf %>% select(geometry)
+      sel_sf     %>% select(geometry),
+      partner_sf %>% select(geometry)
     ))
 
     leafletProxy("map") %>%
@@ -787,7 +794,6 @@ server <- function(input, output, session) {
     rv$selected_pair <- pair_row$rec_pwsid
   })
 
-  # ── Cost chart controls ────────────────────────────────────────────────────
   # ── Cost chart ─────────────────────────────────────────────────────────────
   output$cost_chart <- renderPlotly({
     req(rv$costs, rv$selected_cons, "total_project_cost" %in% names(rv$costs))
@@ -797,7 +803,7 @@ server <- function(input, output, session) {
                    "contingency", "planning_constuction", "engineering_services",
                    "inflation", "regional_multiplier")
 
-    component_labels <- c(
+    comp_labels <- c(
       new_source_cost      = "New Source",
       pipe_line_cost       = "Pipeline",
       connection_fees      = "Connections",
@@ -816,44 +822,41 @@ server <- function(input, output, session) {
       select(rec_pws_name, all_of(cost_cols)) %>%
       pivot_longer(-rec_pws_name, names_to = "component", values_to = "cost") %>%
       mutate(
-        component    = dplyr::recode(component, !!!component_labels),
-        component    = factor(component, levels = unname(component_labels)),
-        rec_pws_name = stringr::str_wrap(rec_pws_name, 20)
+        label        = comp_labels[component],
+        label        = factor(label, levels = unname(comp_labels)),
+        rec_pws_name = stringr::str_wrap(rec_pws_name, 25)
       )
 
-    p <- ggplot(
-      plot_df,
-      aes(
-        x    = component,
-        y    = cost,
-        fill = rec_pws_name,
-        text = paste0(rec_pws_name, "\n", component, ": ", scales::dollar(cost))
-      )
-    ) +
-      geom_col(position = position_dodge(width = 0.75), width = 0.7) +
-      scale_y_continuous(
-        labels = scales::dollar,
-        expand = expansion(mult = c(0, 0.06))
-      ) +
-      scale_fill_brewer(palette = "Blues", direction = 1) +
-      labs(x = NULL, y = "Cost", fill = "Receiving System") +
-      theme_minimal(base_size = 11) +
-      theme(
-        panel.grid.major.x = element_blank(),
-        panel.grid.minor   = element_blank(),
-        axis.text.x        = element_text(angle = 35, hjust = 1, size = 9),
-        legend.position    = "right",
-        legend.key.size    = unit(0.45, "cm"),
-        legend.text        = element_text(size = 8),
-        plot.background    = element_rect(fill = "white", color = NA),
-        panel.background   = element_rect(fill = "white", color = NA)
-      )
+    req(nrow(plot_df) > 0)
 
-    ggplotly(p, tooltip = "text") %>%
-      layout(
-        legend = list(font = list(size = 10)),
-        margin = list(b = 80, r = 20)
+    receivers <- unique(plot_df$rec_pws_name)
+    pal       <- c("#0a2540", "#1a5276", "#2471a3", "#5dade2", "#aed6f1",
+                   "#0e8a7d", "#17a589", "#d4a017", "#e59866", "#7d3c98")
+    colors    <- setNames(rep_len(pal, length(receivers)), receivers)
+
+    fig <- plot_ly()
+    for (rec in receivers) {
+      df_sub <- plot_df %>% filter(rec_pws_name == rec)
+      fig <- fig %>% add_bars(
+        data      = df_sub,
+        x         = ~label,
+        y         = ~cost,
+        name      = rec,
+        marker    = list(color = colors[[rec]]),
+        text      = ~paste0(rec, "<br>", label, ": ", scales::dollar(cost)),
+        hoverinfo = "text"
       )
+    }
+
+    fig %>% layout(
+      barmode       = "group",
+      xaxis         = list(title = "", tickangle = -35, tickfont = list(size = 9)),
+      yaxis         = list(title = "Cost", tickformat = "$,.0f"),
+      legend        = list(font = list(size = 10), orientation = "v"),
+      margin        = list(b = 80, r = 20, t = 10),
+      plot_bgcolor  = "white",
+      paper_bgcolor = "white"
+    )
   })
 
   # ── Summary panel ──────────────────────────────────────────────────────────

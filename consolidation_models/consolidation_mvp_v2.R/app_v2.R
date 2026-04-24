@@ -818,13 +818,18 @@ server <- function(input, output, session) {
       regional_multiplier  = "Regional Adj."
     )
 
+    comp_lookup <- tibble(
+      component = names(comp_labels),
+      label     = unname(comp_labels)
+    )
+
     plot_df <- rv$costs %>%
       filter(pwsid == rv$selected_cons) %>%
       distinct(rec_pwsid, .keep_all = TRUE) %>%
       select(rec_pws_name, all_of(cost_cols)) %>%
       pivot_longer(-rec_pws_name, names_to = "component", values_to = "cost") %>%
+      left_join(comp_lookup, by = "component") %>%
       mutate(
-        label        = dplyr::recode(component, !!!comp_labels),
         label        = factor(label, levels = unname(comp_labels)),
         rec_pws_name = stringr::str_wrap(rec_pws_name, 25)
       )

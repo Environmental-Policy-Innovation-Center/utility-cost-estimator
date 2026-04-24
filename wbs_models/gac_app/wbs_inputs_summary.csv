@@ -1,0 +1,17 @@
+"TestCase","Label","Contaminant","DesignType","AddOn","DesignFlow_MGD","AverageFlow_MGD","EBCT_min","CarbonLifeType","CarbonLifeValue","SpentCarbon","BackwashInterval","ResidualDisposal","TransferMethod","AutomationLevel"
+"TC-01","PFAS | Pressure Vessel | 0.124 MGD","Perfluorooctane Sulfonate (PFOS)","Pressure",0,0.124,0.035,20,"carbon life value- bed volumes",50000,"regeneration off-site (non-hazardous)",168,"POTW","manual transfer",
+"TC-02","PFAS | Pressure Vessel | 1.0 MGD","Perfluorooctane Sulfonate (PFOS)","Pressure",0,0.74,0.251,20,"carbon life value- bed volumes",50000,"regeneration off-site (non-hazardous)",168,"POTW","manual transfer",
+"TC-03","PFAS | Pressure Vessel | 10.0 MGD","Perfluorooctane Sulfonate (PFOS)","Pressure",0,7.365,3.2,20,"carbon life value- bed volumes",50000,"regeneration off-site (non-hazardous)",168,"POTW","eductors",
+"TC-04","TCE/PCE | Pressure Vessel | 0.124 MGD","TCE","Pressure",0,0.124,0.035,7.5,"carbon life value- bed volumes",66600,"regeneration off-site (non-hazardous)",168,"POTW","manual transfer",
+"TC-05","TCE/PCE | Pressure Vessel | 1.0 MGD","TCE","Pressure",0,0.74,0.251,7.5,"carbon life value- bed volumes",66600,"regeneration off-site (non-hazardous)",168,"POTW","manual transfer",
+"TC-06","PFAS | Gravity Basin | 1.0 MGD","Perfluorooctane Sulfonate (PFOS)","Pressure",0,0.74,0.251,20,"carbon life value- bed volumes",50000,"regeneration off-site (non-hazardous)",168,"POTW","manual transfer",
+"TC-07","UVAOP Quench (Add-on) | Pressure Vessel | 0.124 MGD","UVAOP Quench (Add-on)","Pressure",1,0.124,0.035,4,"carbon life value- months",12,"regeneration off-site (non-hazardous)",168,"POTW","manual transfer",
+"TC-08","UVAOP Quench (Add-on) | Pressure Vessel | 0.74 MGD","UVAOP Quench (Add-on)","Pressure",1,0.74,0.251,4,"carbon life value- months",12,"regeneration off-site (non-hazardous)",168,"POTW","manual transfer",
+"TC-09","Other | Pressure Vessel | 0.124 MGD | 40,000 BV | EBCT=7.5","Other","Pressure",0,0.124,0.0992,7.5,"4",40000,"regeneration off-site (non-hazardous)",72,"POTW","manual transfer","fully automated"
+"TC-10","Other | Pressure Vessel | 1.0 MGD | 40,000 BV | EBCT=7.5","Other","Pressure",0,1,0.8,7.5,"4",40000,"regeneration off-site (non-hazardous)",72,"POTW","manual transfer","fully automated"
+"TC-11","Other | Pressure Vessel | 10.0 MGD | 40,000 BV | new backwash","Other","Pressure",0,10,8,7.5,"4",40000,"regeneration off-site (non-hazardous)",72,"POTW","manual transfer","fully automated"
+"TC-12","Other | Pressure Vessel | 0.5 MGD | 20,000 BV | EBCT=10 | backwash tank","Other","Pressure",0,0.5,0.4,10,"4",40000,"regeneration off-site (non-hazardous)",72,"POTW","manual transfer","fully automated"
+"TC-13","Other | Pressure Vessel | 0.124 MGD | carbon life = 12 months","Other","Pressure",0,0.124,0.0992,10,"4",40000,"regeneration off-site (non-hazardous)",72,"POTW","manual transfer","fully automated"
+"TC-14","Other | Pressure Vessel | 1.0 MGD | Freundlich isotherm | on-site regen","Other","Pressure",0,1,0.8,20,"4",40000,"regeneration off-site (non-hazardous)",72,"POTW","manual transfer","fully automated"
+"TC-15","Other | Gravity Basin | 1.0 MGD | 40,000 BV","Other","Pressure",0,1,0.8,7.5,"4",40000,"regeneration off-site (non-hazardous)",72,"POTW","manual transfer","fully automated"
+"TC-16","Other | Pressure Vessel | 5.0 MGD | 66,600 BV | EBCT=20 | mid cost","Other","Pressure",0,5,4,20,"4",40000,"regeneration off-site (non-hazardous)",72,"POTW","manual transfer","fully automated"

@@ -197,6 +197,10 @@ div(id = "loading-overlay",
                 )
               ),
 
+              # ── Design Flow (Other path — uses Step 3 design_flow_I dropdown) ──
+              # No separate design flow input here; the standard Step 3 dropdown
+              # (design_flow_I) is used for "Other" contaminant as well.
+
               # ── System Parameters ───────────────────────────────────────────────
               tags$div(
                 style = "margin-top: 14px;",
@@ -574,7 +578,10 @@ div(id = "loading-overlay",
         ),
 
         # Live conversion + population callout
-        uiOutput(ns("flow_callout"))
+        uiOutput(ns("flow_callout")),
+
+        # Average flow note — shown only when "Other" contaminant is selected
+        uiOutput(ns("avg_flow_display_other"))
 
       ),
       
@@ -698,6 +705,30 @@ inputsServer <- function(id) {
     observeEvent(input$toggle_flow_ref, {
       shinyjs::toggle("flow_ref_table", anim = TRUE, animType = "slide", time = 0.2)
     }, ignoreNULL = TRUE)
+
+    # ── Average flow display for Other path ──────────────────────────────────
+    output$avg_flow_display_other <- renderUI({
+      req(input$contam_I == "Other")
+      other_avg_lookup <- c(
+        "0.030"  = 0.007,  "0.124"  = 0.035,  "0.305"  = 0.094,
+        "0.740"  = 0.251,  "2.152"  = 0.819,  "7.365"  = 3.200,
+        "22.614" = 11.066, "75.072" = 37.536
+      )
+      df_num <- suppressWarnings(as.numeric(input$design_flow_I %||% "0.124"))
+      df <- sprintf("%.3f", df_num)
+      af <- unname(other_avg_lookup[df])
+      tags$p(
+        style = "margin: 6px 0 0; font-size: 12px; color: #555;",
+        tags$i(class = "fa fa-arrow-right", style = "margin-right: 4px; color: #1a5276;"),
+        "Average flow: ",
+        tags$b(sprintf("%.3f MGD", af)),
+        tags$span(
+          style = "color: #888; margin-left: 6px;",
+          sprintf("(%.1f%% of design — from EPA WBS standard inputs)",
+                  af / as.numeric(df) * 100)
+        )
+      )
+    })
 
     # ── Live flow conversion + population callout ─────────────────────────────
     output$flow_callout <- renderUI({
@@ -831,10 +862,20 @@ inputsServer <- function(id) {
 
         list(
           # Flow rates
+          # "Other" contaminant uses the same Step 3 design_flow_I dropdown;
+          # average flow is auto-derived from the standard lookup table.
           design_flow        = input$design_flow_I,
           design_flow_units  = input$df_units,
-          average_flow       = std$average_flow,
-          average_flow_units = std$average_flow_units,
+          average_flow       = if (is_other) {
+            # Auto-derive from the fixed design_flow → average_flow lookup table
+            other_avg_lookup <- c(
+              "0.030"  = 0.007,  "0.124"  = 0.035,  "0.305"  = 0.094,
+              "0.740"  = 0.251,  "2.152"  = 0.819,  "7.365"  = 3.200,
+              "22.614" = 11.066, "75.072" = 37.536
+            )
+            unname(other_avg_lookup[sprintf("%.3f", as.numeric(input$design_flow_I))])
+          } else std$average_flow,
+          average_flow_units = std$average_flow_units %||% "MGD",
 
           # Contaminant
           contaminant     = input$contam_I,

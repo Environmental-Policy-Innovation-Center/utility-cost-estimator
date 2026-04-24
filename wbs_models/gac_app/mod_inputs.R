@@ -553,15 +553,11 @@ div(id = "loading-overlay",
         fluidRow(
           column(
             width = 6,
-            selectizeInput(
+            selectInput(
               ns("design_flow_I"),
               label    = NULL,
               choices  = c("", get_design_number()),
               selected = get_design_number()[1],
-              options  = list(
-                create      = TRUE,
-                placeholder = "Select or type a value"
-              ),
               width = "100%"
             )
           ),
@@ -611,30 +607,10 @@ inputsServer <- function(id) {
     standard_inputs_data <- reactiveVal(NULL)
     suppress_updates <- reactiveVal(FALSE)
     
-    # Observer for design flow units logic (predefined vs custom)
+    # Observer for design flow units — all presets are MGD, always lock to MGD
     observeEvent(input$design_flow_I, {
-      #browser()
-
       if (!is.null(input$design_flow_I) && input$design_flow_I != "") {
-        predefined_numbers <- get_design_number()
-        
-        if (input$design_flow_I %in% predefined_numbers) {
-          # Pre-defined: force MGD
-          updateSelectInput(
-            session, 
-            "df_units",
-            choices = c("MGD"),
-            selected = "MGD"
-          )
-        } else {
-          # Custom: allow MGD or GPM
-          updateSelectInput(
-            session, 
-            "df_units",
-            choices = c("", "MGD", "GPM"),
-            selected = ""
-          )
-        }
+        updateSelectInput(session, "df_units", choices = c("MGD"), selected = "MGD")
       }
     }, ignoreInit = TRUE)
     

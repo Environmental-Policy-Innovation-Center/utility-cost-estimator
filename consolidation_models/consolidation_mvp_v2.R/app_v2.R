@@ -620,12 +620,13 @@ server <- function(input, output, session) {
                service_connections_count, owner_type, health_viols_10yr)
 
     rec_info <- costs %>%
-      distinct(rec_pwsid, rec_pws_name, rec_population_served_count,
-               rec_owner_type, rec_health_viols_10yr)
+      distinct(rec_pwsid, .keep_all = TRUE) %>%
+      select(rec_pwsid, rec_pws_name, rec_population_served_count,
+             rec_owner_type, rec_health_viols_10yr)
 
     cons_sf <- rv$sys_geo %>%
       filter(pwsid %in% cons_ids) %>%
-      left_join(cons_info, by = "pwsid")
+      left_join(cons_info %>% distinct(pwsid, .keep_all = TRUE), by = "pwsid")
 
     rec_sf <- rv$sys_geo %>%
       filter(pwsid %in% rec_ids) %>%
@@ -705,10 +706,8 @@ server <- function(input, output, session) {
       filter(pwsid %in% partner_ids) %>%
       left_join(partner_info, by = c("pwsid" = "rec_pwsid"))
 
-    bbox <- st_bbox(bind_rows(
-      sel_sf     %>% select(geometry),
-      partner_sf %>% select(geometry)
-    ))
+    # Zoom to consolidating system only — receiving can be large and distorts view
+    bbox <- st_bbox(sel_sf %>% select(geometry))
 
     leafletProxy("map") %>%
       clearGroup("highlight") %>%
@@ -850,6 +849,7 @@ server <- function(input, output, session) {
       "Regional Adj."  = "#7d3c98"
     )
 
+    print(plot_df)
     fig <- plot_ly()
     for (comp in levels(plot_df$label)) {
       df_sub <- plot_df %>% filter(label == comp)
@@ -859,13 +859,14 @@ server <- function(input, output, session) {
         y         = ~cost,
         name      = comp,
         marker    = list(color = comp_pal[[comp]]),
-        text      = ~paste0(rec_pws_name, "<br>", comp, ": ", scales::dollar(cost)),
+        text      = ~paste0(label, ": ", scales::dollar(cost)),
         hoverinfo = "text"
       )
     }
 
     fig %>%
       layout(
+        
         barmode       = "stack",
         xaxis         = list(title = "", tickangle = -35, tickfont = list(size = 12)),
         yaxis         = list(title = "Cost", tickformat = "$,.0f", tickfont = list(size = 12)),
@@ -887,7 +888,7 @@ server <- function(input, output, session) {
 
     header <- div(
       style = "background:#1a5276; color:white; padding:10px 14px;
-                border-radius:6px 6px 0 0; margin-bottom:0;",
+                border-radius:6px 6px 0 0; margin-bottom:0;", tags$small("Joining System: "),
       tags$b(pairs$pws_name[1]), " — ", tags$small(rv$selected_cons),
       tags$span(style = "float:right;",
                 sprintf("%d potential receiving system(s)", nrow(pairs)))

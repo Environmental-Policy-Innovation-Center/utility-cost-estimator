@@ -26,8 +26,5 @@ wbs_models/gac_app/comments.R
 wbs_models/gac_app/granular-activated-carbon-gac.xlsm
 wbs_models/gac_app/www/.DS_Store
 wbs_models/gac_app/www/.Rhistory
-wbs_models/gac_app/test_wbs_comparison.R
-wbs_models/gac_app/wbs_comparison_results.csv
-wbs_models/gac_app/wbs_inputs_summary.csv
 .Rhistory
 .DS_Store

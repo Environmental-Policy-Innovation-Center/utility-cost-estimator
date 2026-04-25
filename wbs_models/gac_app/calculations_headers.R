@@ -385,7 +385,7 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
       (n + 1) * basin_length * basin_depth_total * conc_thick +
       (basin_length + 2 * conc_thick) * (basin_width * n + conc_thick * (n + 1)) * conc_thick
     ) / 27
-    conc_uc     <- 739.6055887474795   # conc_basin_cost_cl col3 ($/cy), cost data sheet D178
+    conc_uc     <- get_cost_data_uc("conc_basin_cost_cl", default = 739.61)  # cost_data conc_basin_cost_cl col4
     concrete_cost <- conc_vol_cy * conc_uc
 
     # ── 1.2.2 Internals (Underdrain/Backwash System) (OUTPUT C46, J46) ────────
@@ -398,16 +398,10 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
       if (sa > 1001) return(NA_real_)   # "contact vendor"
       (-5.629e-06) * sa^3 + 0.013916018 * sa^2 + 52.090398698 * sa + 47002.723866153
     }
-    # Backwash distribution (cont_top_eq): J*exp(K*D), D = basin_length (ft), range [0,30]
-    # cont_top_cost_cl: VLOOKUP(basin_length, cont_top_cost_cl, col) — step table with basin_length as key
-    # Values from Cost Data rows 193-205
-    cont_top_cost_table <- data.frame(
-      lo  = c(0,  9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31),
-      hi  = c(8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, NA),
-      uc  = c(56676.281085048, 59919.803195337, 63163.325305626, 79210.224167055,
-              83648.728107450, 107036.229639533, 112840.427100050, 126326.650611252,
-              130082.307791586, 160810.411994323, 185734.318736543, 192904.209717181, NA)
-    )
+    # Backwash distribution (cont_top_eq): step lookup by basin_length (ft).
+    # cont_top_cost_cl: col 2 = lo, col 3 = hi, col 4 = unit cost (cost_data sheet).
+    # "contact vendor" rows come through as uc = NA.
+    cont_top_cost_table <- get_cost_data_table("cont_top_cost_cl")
     lookup_cont_top <- function(len) {
       for (k in seq_len(nrow(cont_top_cost_table))) {
         if (len >= cont_top_cost_table$lo[k] &&
@@ -426,13 +420,13 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
     # railing = 2*(n*W + 2*t/2 + (n-1)*t) + 2*(L + 2*t/2)  [lf]  (CC C76 common-wall formula)
     railing_lf    <- 2 * (n * basin_width + conc_thick + (n - 1) * conc_thick) +
                      2 * (basin_length + conc_thick)
-    railing_uc    <- 44    # metal_cost_cl: Aluminum Railing = $44/lf
+    railing_uc    <- get_cost_data_uc("metal_cost_cl", item = "Aluminum Railing", default = 44)  # cost_data metal_cost_cl
     railing_cost  <- railing_lf * railing_uc
 
     # ── 1.2.4 Aluminum Stairs (OUTPUT C48) ────────────────────────────────────
     # quantity = risers (CDA C46 = 15) × total_num_basins
     stairs_risers <- risers_per * n
-    stairs_uc     <- 460   # metal_cost_cl: Aluminum Stairs = $460/riser
+    stairs_uc     <- get_cost_data_uc("metal_cost_cl", item = "Aluminum Stairs", default = 460)  # cost_data metal_cost_cl
     stairs_cost   <- stairs_risers * stairs_uc
 
     # ── 1.2.5 Excavation volume (CC C74) ──────────────────────────────────────
@@ -442,13 +436,13 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
       (n * W + (n + 1) * t + oe) * (L + 2*t + oe) * (D + t + oe) +
       0.5 * 3 * (D + t + oe)^2 * (L + 2*t + oe)
     ) / 27
-    excavate_uc   <- 30.879999999999995   # excavate_cost_cl col3 ($/cy)
+    excavate_uc   <- get_cost_data_uc("excavate_cost_cl", default = 30.88)  # cost_data excavate_cost_cl col4
     excavation_cost <- excav_cy * excavate_uc
 
     # ── 1.2.6 Backfill volume (CC C75) ────────────────────────────────────────
     # backfill_cy = excav_cy - (n*W+(n+1)*t)*(L+2t)*(D+t) / 27
     backfill_cy  <- excav_cy - (n * W + (n + 1) * t) * (L + 2*t) * (D + t) / 27
-    backfill_uc  <- 18.65   # backfill_cost_cl col3 ($/cy)
+    backfill_uc  <- get_cost_data_uc("backfill_cost_cl", default = 18.65)  # cost_data backfill_cost_cl col4
     backfill_cost <- backfill_cy * backfill_uc
 
     # ── Total basin cost ───────────────────────────────────────────────────────
@@ -3906,8 +3900,14 @@ calculate_gac_system <- function(params) {
       min_bd_g     <- get_assumption(critical_assumptions, "min_depth", 3) # [GA]
       max_bd_g     <- get_assumption(critical_assumptions, "max_depth", 10) # [GA]      
       
-      load_max_g   <- get_assumption(critical_assumptions, "load_max", 10) 
-      load_min_g   <- get_assumption(critical_assumptions, "load_min", 0.5) # [GA] 
+      load_max_g   <- get_assumption(critical_assumptions, "load_max", 10)
+      load_min_g   <- get_assumption(critical_assumptions, "load_min", 0.5) # [GA]
+
+      # NRD constants for gravity CC C34 formula — read from CDA once, used in loop.
+      nrd_small_1_g   <- as.integer(get_assumption(critical_assumptions, "NRD_small_1",        1))
+      nrd_small_g     <- as.integer(get_assumption(critical_assumptions, "NRD_small",          0))
+      nrd_med_g       <- as.integer(get_assumption(critical_assumptions, "NRD_basins_medium",  1))
+      nrd_large_g     <- as.integer(get_assumption(critical_assumptions, "NRD_basins_large",   2))
 
       r_disc <- 0.07;  ul_yrs <- 16.1
       crf_g  <- r_disc * (1 + r_disc)^ul_yrs / ((1 + r_disc)^ul_yrs - 1)
@@ -3991,8 +3991,8 @@ calculate_gac_system <- function(params) {
           nrd_c     <- if (!is.na(nrd_i_c) && !is.null(p$redundancy) &&
                              !is.na(p$redundancy) && p$redundancy != "") {
             as.integer(nrd_i_c)                        # user-specified NRD_I
-          } else if (op_num_c == 1L) { 1L              # NRD_small_1 = 1 (CDA C9)
-          } else { c(0L, 1L, 2L)[ss_cat2_c] }          # NRD_small/medium/large by flow size
+          } else if (op_num_c == 1L) { nrd_small_1_g
+          } else { c(nrd_small_g, nrd_med_g, nrd_large_g)[ss_cat2_c] }
           total_num_c <- op_num_c + nrd_c
 
           # ── Basin footprint and facility length for this candidate ─────────
@@ -4383,7 +4383,9 @@ calculate_gac_system <- function(params) {
         tbl[[max(which(keys <= d), 1L)]]
       }
 
-      redund_freq <- as.integer(get_assumption(critical_assumptions, "redund_freq", 4))  # [GA] 
+      redund_freq  <- as.integer(get_assumption(critical_assumptions, "redund_freq",  4))  # CDA C16 [GA]
+      nrd_small_1  <- as.integer(get_assumption(critical_assumptions, "NRD_small_1", 1))  # CDA C9
+      nrd_small    <- as.integer(get_assumption(critical_assumptions, "NRD_small",   0))  # CDA C10
 
       r_disc <- 0.07;  ul_yrs <- 16.1
       crf_p  <- r_disc * (1 + r_disc)^ul_yrs / ((1 + r_disc)^ul_yrs - 1)
@@ -4463,7 +4465,7 @@ calculate_gac_system <- function(params) {
           } else if (design_flow_mgd >= 1) {
             as.integer(ceiling(n_try / redund_freq))  # large: ROUNDUP(n/4, 0)
           } else {
-            if (op_num_tanks_try == 1L) 1L else 0L    # small: NRD_small_1=1 or NRD_small=0
+            if (op_num_tanks_try == 1L) nrd_small_1 else nrd_small  # CDA C9/C10
           }
           p$redundancy <- pv_nrd
 
@@ -4938,7 +4940,7 @@ calculate_gac_system <- function(params) {
       n_series     <- as.integer(get_value(params$num_contactors_in_series, 1))
       op_num_tanks <- n_trains * n_series
       params$redundancy <- if (design_flow_mgd >= 1) {
-        as.integer(ceiling(n_trains / 4))   # ROUNDUP(num_treat_lines / redund_freq, 0)  [GA] replace 4 with as.integer(get_assumption(critical_assumptions, "redund_freq", 4))
+        as.integer(ceiling(n_trains / as.integer(get_assumption(critical_assumptions, "redund_freq", 4))))  # ROUNDUP(n / redund_freq, 0) — CDA C16
       } else if (op_num_tanks == 1L) {
         as.integer(get_assumption(critical_assumptions, "NRD_small_1", 1))  # NRD_small_1 = 1  [GA] 
       } else {
@@ -5391,8 +5393,10 @@ calculate_gac_system <- function(params) {
         # ── Small systems (< 1 MGD): vessel fp + backwash pump fp if new pumps;
         #    no backwash tank (ss_cat2=1 uses existing infrastructure),
         #    no booster (same), no office (workbook n_e_m×100 = 0 for small).
-        no_bw_str_fp <- tolower(trimws(as.character(params$no_backwash %||% "")))
-        back_pump_included_fp <- (no_bw_str_fp != "existing pumps")
+        # Use the actual resolved backwash pump count — params$no_backwash may be
+        # stored as "1"/1/TRUE (not the string "existing pumps") in the sheet, so
+        # a string comparison is unreliable.  pump_results is already computed.
+        back_pump_included_fp <- (pump_results$backwash_pumps %||% 0) > 0
         fp_req_m <- vfp_m + (if (back_pump_included_fp) back_pump_fp_m else 0)
       } else {
         # ── Large systems: full formula (vessel + backwash tank + pumps + office)

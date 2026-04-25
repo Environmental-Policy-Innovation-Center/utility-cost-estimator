@@ -1,4 +1,5 @@
 # setwd("wbs_models/gac_app/") # for deployment
+# Source required libraries
 source("load_libraries.R")
 
 # Source modules
@@ -12,7 +13,7 @@ source("utils.R")
 source("populate_wbs_table.R")
 source("cost_equations.R")
 
-#Cache google to reduce load times
+# Cache google to reduce load times
 googlesheets4::gs4_deauth()  # for public sheets, currently anyone with link has
 
 message("Loading cost coefficients at startup...")
@@ -25,10 +26,9 @@ load_gac_sheet_cache()
 load_critical_design_assumptions_sheet_cache()
 message("Sheet cache ready.")
 
-# Source calculation logic AFTER caches are populated so that file-level
-# assignments (e.g. critical_assumptions on line 3 of calculations_headers.R)
-# resolve against a live option rather than NULL.
-#source("calculations.R")
+# Source calculation logic 
+# AFTER caches are populated so that file-level
+# assignments resolve against a live option rather than NULL.
 source("calculations_headers.R")
 
 

@@ -28,6 +28,16 @@ load_gac_sheet_cache <- function() {
       janitor::clean_names()
   })
 
+  # cost_data has no proper header row (row 1 is a title cell).
+  # Read without col_names so every row is a data row and columns are accessed
+  # positionally: col 1 = range_name label, col 4 = unit cost.
+  message("  caching sheet: cost_data")
+  cache[["cost_data"]] <- as.data.frame(
+    googlesheets4::read_sheet(URL, sheet = "cost_data",
+                              col_names = FALSE, col_types = "c"),
+    stringsAsFactors = FALSE
+  )
+
   options(gac.sheet_cache = cache)
   invisible(cache)
 }
@@ -64,6 +74,81 @@ get_sheet_data <- function(sheet_name, return_type = "vector", column = "name") 
 get_contam_type   <- function(return_type = "vector") get_sheet_data("contam_type",   return_type)
 get_design_type   <- function(return_type = "vector") get_sheet_data("design_type",   return_type)
 get_design_number <- function(return_type = "vector") get_sheet_data("design_number", return_type)
+
+# ── cost_data lookups ─────────────────────────────────────────────────────────
+#
+# The cost_data sheet is a positional copy of the workbook Cost Data (CD) tab.
+# Row 1 is a title cell, so the sheet is cached without column headers.
+# Column layout (consistent across all named ranges in this sheet):
+#   col 1  range_name label  (e.g. "backfill_cost_cl")
+#   col 2  lower bound / item name
+#   col 3  upper bound / unit
+#   col 4  unit cost         ← the value most callers want
+#   col 5  useful life (large system)
+#   col 6  useful life (small system)
+
+#' Look up a unit cost from cost_data by range_name (and optional item).
+#'
+#' @param range_name  Label in column 1 (e.g. "backfill_cost_cl",
+#'   "metal_cost_cl", "conc_basin_cost_cl").
+#' @param item        For multi-row ranges (e.g. "metal_cost_cl"), the item
+#'   descriptor in column 2 (e.g. "Aluminum Railing").  NULL for single-row
+#'   ranges.
+#' @param default     Fallback value when the label is not found in the cache.
+#' @return Numeric unit cost from column 4, or default on miss.
+get_cost_data_uc <- function(range_name, item = NULL, default = NA_real_) {
+  cd <- getOption("gac.sheet_cache")[["cost_data"]]
+  if (is.null(cd)) {
+    warning("get_cost_data_uc: cost_data not cached — returning default")
+    return(default)
+  }
+
+  rows <- cd[!is.na(cd[[1]]) & cd[[1]] == range_name, , drop = FALSE]
+  if (nrow(rows) == 0) {
+    warning(sprintf("get_cost_data_uc: '%s' not found in cost_data", range_name))
+    return(default)
+  }
+
+  if (!is.null(item)) {
+    rows <- rows[!is.na(rows[[2]]) & rows[[2]] == item, , drop = FALSE]
+    if (nrow(rows) == 0) {
+      warning(sprintf("get_cost_data_uc: item '%s' not found in '%s'", item, range_name))
+      return(default)
+    }
+  }
+
+  uc <- suppressWarnings(as.numeric(rows[[4]][1]))
+  if (is.na(uc)) default else uc
+}
+
+#' Build a lo/hi/uc step table from a multi-row cost_data range.
+#'
+#' Used for ranges like cont_top_cost_cl where each row represents a size band.
+#' Rows whose unit cost column contains "contact vendor" (or is otherwise
+#' non-numeric) are retained with uc = NA so callers can detect out-of-range.
+#'
+#' @param range_name  Label in column 1 (e.g. "cont_top_cost_cl").
+#' @return Data frame with columns lo (numeric), hi (numeric), uc (numeric).
+#'   Returns an empty data frame on cache miss.
+get_cost_data_table <- function(range_name) {
+  cd <- getOption("gac.sheet_cache")[["cost_data"]]
+  if (is.null(cd)) {
+    warning("get_cost_data_table: cost_data not cached")
+    return(data.frame(lo = numeric(0), hi = numeric(0), uc = numeric(0)))
+  }
+
+  rows <- cd[!is.na(cd[[1]]) & cd[[1]] == range_name, , drop = FALSE]
+  if (nrow(rows) == 0) {
+    warning(sprintf("get_cost_data_table: '%s' not found in cost_data", range_name))
+    return(data.frame(lo = numeric(0), hi = numeric(0), uc = numeric(0)))
+  }
+
+  data.frame(
+    lo = suppressWarnings(as.numeric(rows[[2]])),
+    hi = suppressWarnings(as.numeric(rows[[3]])),
+    uc = suppressWarnings(as.numeric(rows[[4]]))
+  )
+}
 
 #' Cache the Critical Design Assumptions sheet at startup.
 #'

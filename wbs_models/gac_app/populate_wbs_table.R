@@ -158,6 +158,7 @@ derive_applicability <- function(params, contactors, tanks, piping, pumps, gac, 
     wbs_14_1_low             = (!is_shed_fp) && grepl("low",  cost_lv),
     wbs_14_1_mid             = (!is_shed_fp) && grepl("mid",  cost_lv),
     wbs_14_1_high            = (!is_shed_fp) && grepl("high", cost_lv),
+    wbs_14_2_hvac            = isTRUE(safe_as_logical(site$include_hvac %||% FALSE)),
     wbs_14_3_retrofit_bldg1  = is_retrofit,
     wbs_14_4_retrofit_bldg2  = is_retrofit
   )
@@ -258,16 +259,17 @@ is_wbs_applicable <- function(wbs, full_item_name, app) {
   # ------ 14. Buildings ------
   if (grepl("^14\\.3", wbs)) return(app$wbs_14_3_retrofit_bldg1)
   if (grepl("^14\\.4", wbs)) return(app$wbs_14_4_retrofit_bldg2)
-  # 14.1.1 / 14.2.1: pick the correct sub-type by matching item name keywords.
-  # Workbook selects exactly one of: Small Low Cost Shed, Low Quality, Medium Quality, High Quality.
-  if (grepl("^14\\.[12]\\.1", wbs)) {
+  # 14.1.1 Buildings: one sub-type selected by item name.
+  if (grepl("^14\\.1\\.1", wbs)) {
     item_lc <- tolower(trimws(as.character(full_item_name %||% "")))
-    if (grepl("small low cost shed|shed", item_lc))   return(isTRUE(app$wbs_14_1_shed))
-    if (grepl("low quality",             item_lc))   return(isTRUE(app$wbs_14_1_low))
-    if (grepl("medium quality",          item_lc))   return(isTRUE(app$wbs_14_1_mid))
-    if (grepl("high quality",            item_lc))   return(isTRUE(app$wbs_14_1_high))
-    return(isTRUE(app$wbs_14_buildings))             # fallback for other 14.x.1 rows
+    if (grepl("small low cost shed|shed", item_lc)) return(isTRUE(app$wbs_14_1_shed))
+    if (grepl("low quality",             item_lc))  return(isTRUE(app$wbs_14_1_low))
+    if (grepl("medium quality",          item_lc))  return(isTRUE(app$wbs_14_1_mid))
+    if (grepl("high quality",            item_lc))  return(isTRUE(app$wbs_14_1_high))
+    return(isTRUE(app$wbs_14_buildings))
   }
+  # 14.2.1 HVAC: only applicable when include_hvac = TRUE.
+  if (grepl("^14\\.2\\.1", wbs)) return(isTRUE(app$wbs_14_2_hvac))
   if (grepl("^14\\.",  wbs)) return(app$wbs_14_buildings)
   
   # Default: keep
@@ -537,30 +539,33 @@ populate_wbs_values <- function(wbs, item_lower, contactors, tanks, piping, pump
   # ── 3.4.2  Residuals Piping – Excavation ─────────────────────────────────────
   if (grepl("^3\\.4\\.2$", wbs)) {
     qty <- piping$res_trench_vol_cy %||% NA_real_
-    uc  <- 30.879999999999995   # excavate_cost_cl (workbook col3 = 30.88)
+    ds  <- piping$res_pipe_diam     %||% NA_real_   # pipe diameter (in.)
+    uc  <- get_cost_data_uc("excavate_cost_cl", default = 30.88)
     tc  <- if (!is.na(qty)) qty * uc else NA_real_
   }
 
   # ── 3.4.3  Residuals Piping – Bedding ────────────────────────────────────────
   if (grepl("^3\\.4\\.3$", wbs)) {
     qty <- piping$res_bedding_vol_cy %||% NA_real_
+    ds  <- piping$res_pipe_diam      %||% NA_real_
     uc  <- 45.35   # pipe_bedding_cost_cl (workbook = 45.35)
     tc  <- if (!is.na(qty)) qty * uc else NA_real_
   }
 
   # ── 3.4.5  Residuals Piping – Backfill and Compaction ────────────────────────
-  # Workbook OUTPUT C96 = res_trench_vol (same as excavation, per workbook formula
-  # backfill_cy = excavation_cy in cost equations and piping module).
+  # Workbook OUTPUT C96 = res_trench_vol (same as excavation volume).
   if (grepl("^3\\.4\\.5$", wbs)) {
-    qty <- piping$res_trench_vol_cy  %||% NA_real_   # = res_trench_vol (workbook C96)
-    uc  <- 18.65   # backfill_cost_cl (workbook col3 = 18.65)
+    qty <- piping$res_trench_vol_cy  %||% NA_real_
+    ds  <- piping$res_pipe_diam      %||% NA_real_
+    uc  <- get_cost_data_uc("backfill_cost_cl", default = 18.65)
     tc  <- if (!is.na(qty)) qty * uc else NA_real_
   }
 
   # ── 3.4.6  Residuals Piping – Thrust Blocks ──────────────────────────────────
   if (grepl("^3\\.4\\.6$", wbs)) {
     qty <- piping$res_block_vol_cy %||% NA_real_
-    uc  <- 739.6055887474795   # conc_basin_cost_cl col3 ($/cy)
+    ds  <- piping$res_pipe_diam    %||% NA_real_
+    uc  <- get_cost_data_uc("conc_basin_cost_cl", default = 739.61)
     tc  <- if (!is.na(qty)) qty * uc else NA_real_
   }
 
@@ -621,27 +626,36 @@ populate_wbs_values <- function(wbs, item_lower, contactors, tanks, piping, pump
   }
 
   # ── 4.3.1  Check Valves – Backwash ───────────────────────────────────────────
+  # The calculation always uses PP/PVC (pp_chv_cost).  If Sheet23 has multiple
+  # material rows, only populate the PP/PVC row; blank all others to avoid
+  # inflating the total when priority_selection_table has no entry for 4.3.x.
   if (grepl("^4\\.3\\.1$", wbs)) {
-    qty <- piping$back_chv_qty  %||% 0
-    ds  <- piping$back_pipe_diam %||% NA_real_
-    uc  <- if (!is.na(qty) && qty > 0) (piping$back_chv_cost %||% 0) / qty else NA_real_
-    tc  <- piping$back_chv_cost %||% NA_real_
+    if (grepl("pp|pvc|polypropylene|plastic", item_lower)) {
+      qty <- piping$back_chv_qty  %||% 0
+      ds  <- piping$back_pipe_diam %||% NA_real_
+      uc  <- if (!is.na(qty) && qty > 0) (piping$back_chv_cost %||% 0) / qty else NA_real_
+      tc  <- piping$back_chv_cost %||% NA_real_
+    }
   }
 
   # ── 4.3.2  Check Valves – Residuals ──────────────────────────────────────────
   if (grepl("^4\\.3\\.2$", wbs)) {
-    qty <- piping$res_chv_qty   %||% 0
-    ds  <- piping$res_pipe_diam  %||% NA_real_
-    uc  <- if (!is.na(qty) && qty > 0) (piping$res_chv_cost %||% 0) / qty else NA_real_
-    tc  <- piping$res_chv_cost  %||% NA_real_
+    if (grepl("pp|pvc|polypropylene|plastic", item_lower)) {
+      qty <- piping$res_chv_qty   %||% 0
+      ds  <- piping$res_pipe_diam  %||% NA_real_
+      uc  <- if (!is.na(qty) && qty > 0) (piping$res_chv_cost %||% 0) / qty else NA_real_
+      tc  <- piping$res_chv_cost  %||% NA_real_
+    }
   }
 
   # ── 4.3.5  Check Valves – Influent ───────────────────────────────────────────
   if (grepl("^4\\.3\\.5$", wbs)) {
-    qty <- piping$in_chv_qty    %||% 0
-    ds  <- piping$in_out_pipe_diam %||% NA_real_
-    uc  <- if (!is.na(qty) && qty > 0) (piping$in_chv_cost %||% 0) / qty else NA_real_
-    tc  <- piping$in_chv_cost   %||% NA_real_
+    if (grepl("pp|pvc|polypropylene|plastic", item_lower)) {
+      qty <- piping$in_chv_qty    %||% 0
+      ds  <- piping$in_out_pipe_diam %||% NA_real_
+      uc  <- if (!is.na(qty) && qty > 0) (piping$in_chv_cost %||% 0) / qty else NA_real_
+      tc  <- piping$in_chv_cost   %||% NA_real_
+    }
   }
 
   # ── 5.1  Booster Pumps ───────────────────────────────────────────────────────
@@ -675,43 +689,52 @@ populate_wbs_values <- function(wbs, item_lower, contactors, tanks, piping, pump
   }
 
   # ── 6.1.1  Flow Meters – Influent and Treated Water ──────────────────────────
+  # calculate_controls uses fm_in_PROP_tc in its total_cost (propeller selected).
+  # Only populate the matching meter-type row; leave other types as NA to prevent
+  # all variants from inflating the total when 6.1.1 is absent from
+  # priority_selection_table.csv.
   if (grepl("^6\\.1\\.1$", wbs)) {
     ds  <- piping$in_out_pipe_diam %||% NA_real_
-    if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_op_uc   %||% 0 }
-    else if (grepl("propeller", item_lower)) { qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_prop_uc %||% 0 }
+    if      (grepl("propeller", item_lower)) { qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_prop_uc %||% 0 }
+    else if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_op_uc   %||% 0 }
     else if (grepl("venturi",   item_lower)) { qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_ven_uc  %||% 0 }
     else if (grepl("magnetic",  item_lower)) { qty <- controls$tot_fm_in %||% 0; uc <- controls$fm_in_mag_uc  %||% 0 }
-    if (!is.na(qty)) tc <- qty * uc
+    # Only keep the propeller row (matches total_cost); blank all others
+    if (!grepl("propeller", item_lower)) { qty <- NA_real_; uc <- NA_real_ }
+    if (!is.na(qty) && qty > 0) tc <- qty * uc
   }
 
   # ── 6.2.1  Flow Meters – Process ─────────────────────────────────────────────
   if (grepl("^6\\.2\\.1$", wbs)) {
     ds  <- piping$proc_pipe_diam %||% NA_real_
-    if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_op_uc   %||% 0 }
-    else if (grepl("propeller", item_lower)) { qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_prop_uc %||% 0 }
+    if      (grepl("propeller", item_lower)) { qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_prop_uc %||% 0 }
+    else if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_op_uc   %||% 0 }
     else if (grepl("venturi",   item_lower)) { qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_ven_uc  %||% 0 }
     else if (grepl("magnetic",  item_lower)) { qty <- controls$tot_fm_proc %||% 0; uc <- controls$fm_proc_mag_uc  %||% 0 }
-    if (!is.na(qty)) tc <- qty * uc
+    if (!grepl("propeller", item_lower)) { qty <- NA_real_; uc <- NA_real_ }
+    if (!is.na(qty) && qty > 0) tc <- qty * uc
   }
 
   # ── 6.3.1  Flow Meters – Backwash ────────────────────────────────────────────
   if (grepl("^6\\.3\\.1$", wbs)) {
     ds  <- piping$back_pipe_diam %||% NA_real_
-    if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_op_uc   %||% 0 }
-    else if (grepl("propeller", item_lower)) { qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_prop_uc %||% 0 }
+    if      (grepl("propeller", item_lower)) { qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_prop_uc %||% 0 }
+    else if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_op_uc   %||% 0 }
     else if (grepl("venturi",   item_lower)) { qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_ven_uc  %||% 0 }
     else if (grepl("magnetic",  item_lower)) { qty <- controls$tot_fm_back %||% 0; uc <- controls$fm_back_mag_uc  %||% 0 }
-    if (!is.na(qty)) tc <- qty * uc
+    if (!grepl("propeller", item_lower)) { qty <- NA_real_; uc <- NA_real_ }
+    if (!is.na(qty) && qty > 0) tc <- qty * uc
   }
 
   # ── 6.4.1  Flow Meters – Residuals ───────────────────────────────────────────
   if (grepl("^6\\.4\\.1$", wbs)) {
     ds  <- piping$res_pipe_diam %||% NA_real_
-    if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_op_uc   %||% 0 }
-    else if (grepl("propeller", item_lower)) { qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_prop_uc %||% 0 }
+    if      (grepl("propeller", item_lower)) { qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_prop_uc %||% 0 }
+    else if (grepl("orifice",   item_lower)) { qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_op_uc   %||% 0 }
     else if (grepl("venturi",   item_lower)) { qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_ven_uc  %||% 0 }
     else if (grepl("magnetic",  item_lower)) { qty <- controls$tot_fm_res %||% 0; uc <- controls$fm_res_mag_uc  %||% 0 }
-    if (!is.na(qty)) tc <- qty * uc
+    if (!grepl("propeller", item_lower)) { qty <- NA_real_; uc <- NA_real_ }
+    if (!is.na(qty) && qty > 0) tc <- qty * uc
   }
 
   # ── 6.5  Level Switches/Alarms ────────────────────────────────────────────────
@@ -764,10 +787,15 @@ populate_wbs_values <- function(wbs, item_lower, contactors, tanks, piping, pump
   }
 
   # ── 6.12.1  Sampling Ports ───────────────────────────────────────────────────
+  # calculate_controls uses ports_ss_cost in total_cost → SS is the selected
+  # material.  Only populate the stainless steel row; blank CS to prevent
+  # double-counting when both variants appear from Sheet23.
   if (grepl("^6\\.12\\.1$", wbs)) {
-    qty <- controls$ports       %||% 0
-    uc  <- controls$sampling_uc %||% 0
-    tc  <- if (!is.na(qty)) qty * uc else NA_real_
+    if (grepl("stainless|\\bss\\b", item_lower)) {
+      qty <- controls$ports       %||% 0
+      uc  <- controls$sampling_uc %||% 0
+      tc  <- if (!is.na(qty)) qty * uc else NA_real_
+    }
   }
 
   # ── 6.13  Electrical Enclosure ────────────────────────────────────────────────

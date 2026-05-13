@@ -108,10 +108,13 @@ select_vessel_material <- function(design_flow_mgd, component_level = "Low") {
   selected <- select_component("1.1.1", design_flow_mgd, component_level)
   
   if (is.null(selected)) {
-    # Fallback to simplified approach
+    # Fallback when priority table is unavailable.
+    # SS is excluded: it is priority 4 (last resort) for Low/Mid cost and only
+    # first choice for High cost — the priority table handles that correctly in
+    # normal operation. Using SS here would route into ss_pv_eq for any large
+    # system that hits this fallback, which is never appropriate for Low/Mid.
     if (design_flow_mgd < 0.5) return("FG")
-    if (design_flow_mgd < 2.0) return("CS")
-    return("SS")
+    return("CS")
   }
   
   # Map item name to material code

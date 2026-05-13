@@ -272,6 +272,20 @@ calculate_pressure_vessel_cost <- function(volume_gal, material = "CS",
     )
   }
 
+  # SS max range = 27,101 gal (same ceiling as CSP). If SS is out of range,
+  # cascade to CS (priority 2 for High cost — the only component level that
+  # selects SS as first choice). Without this block a High cost design with a
+  # very large vessel would return NA / "Contact vendor" with no further attempt.
+  if (is.na(unit_cost) && equation_key == "ss_pv_eq") {
+    message(sprintf("  [PV Cost] ss_pv_eq out of range (%.0f gal > 27101) — cascading to CS (CompSelect priority 2 for High cost)",
+                    volume_gal))
+    cs_coeffs <- get_equipment_coefficients("cs_pv_eq", component_level, coeff_table)
+    unit_cost  <- calculate_equipment_cost(
+      Q = volume_gal, coeffs = cs_coeffs,
+      min_range = cs_coeffs$min_range, max_range = cs_coeffs$max_range
+    )
+  }
+
   message(sprintf("  [PV Cost Function] Unit cost: $%.2f",
                   if (is.na(unit_cost)) -1 else unit_cost))
 

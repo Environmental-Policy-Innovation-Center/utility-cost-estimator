@@ -302,9 +302,13 @@ calculate_contactors <- function(design_flow, ebct, geometry, num_trains, num_co
   vessel_material <- tryCatch({
     select_vessel_material(design_flow, component_level_name)
   }, error = function(e) {
-    # Fallback to simplified approach if priority system fails
+    # Fallback when priority table is unavailable.
+    # SS is excluded: it is priority 4 (last resort) for Low/Mid cost and only
+    # first choice for High cost — the priority table handles that correctly in
+    # normal operation. Using SS here would route into ss_pv_eq for any large
+    # system that hits this fallback, which is never appropriate for Low/Mid.
     warning("Priority selection failed, using fallback: ", e$message)
-    if (design_flow < 0.5) "FG" else if (design_flow < 2.0) "CS" else "SS"
+    if (design_flow < 0.5) "FG" else "CS"
   })
   
   message(sprintf("=== CONTACTOR COSTING DEBUG ==="))

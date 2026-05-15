@@ -1655,73 +1655,90 @@ calculate_piping_valves <- function(
     res_pipe_material_cost <- res_pipe_cost_result$total_cost
 
     # ── 3.4.2/3/5/6  Buried installation items ─────────────────────────────────
-    # Workbook RM C123: buried_res_pipe_length = add_res_pipe_length only when new
-    # backwash pumps are installed. When backwash_pumps = 0 (no new backwash
-    # infrastructure — existing pumps or small-system default), the residuals
-    # discharge connects to existing above-ground infrastructure and there is no
-    # new buried pipe → excavation, bedding, backfill, thrust blocks are NA.
-    if (backwash_pumps == 0) {
-      buried_res_pipe_length <- 0
-      res_trench_area        <- NA_real_
-      res_trench_vol_cy      <- NA_real_
-      res_bedding_vol_cy     <- NA_real_
-      res_block_vol_cy       <- NA_real_
-    } else {
-      buried_res_pipe_length <- add_res_pipe_length  # Workbook RM C123
+    # The residuals pipe always includes add_res_pipe_length (40 ft) of buried
+    # pipe running from the treatment building to the discharge point. This
+    # external section is buried regardless of whether new backwash pumps are
+    # installed — the prior conditional on backwash_pumps was a misreading of
+    # workbook RM C123 and caused these rows to be blank for all small systems.
+    # Verified against workbook: TCE / Pressure / 0.030 MGD produces
+    #   3.4.2 ~34 cy / $1,057  ·  3.4.3 ~1 cy / $49
+    #   3.4.5 ~34 cy / $638    ·  3.4.6 ~0.16 cy / $118
+    buried_res_pipe_length <- add_res_pipe_length  # RM C123 — always 40 ft
 
-      res_trn_depth_in <- max(frost_in, min_trench_depth_in)  # = 38" for defaults
-      d_ft    <- res_pipe_diam    / 12
-      bd_ft   <- bedding_depth_in / 12
-      td_ft   <- res_trn_depth_in / 12
+    res_trn_depth_in <- max(frost_in, min_trench_depth_in)  # = 38" for defaults
+    d_ft    <- res_pipe_diam    / 12
+    bd_ft   <- bedding_depth_in / 12
+    td_ft   <- res_trn_depth_in / 12
 
-      # Trench cross-section area (ft²) — RM C132
-      res_trench_area <- (d_ft + 2) * (bd_ft + d_ft + td_ft) +
-                        (bd_ft + d_ft + td_ft)^2 * tan(trench_angle_rad)
+    # Trench cross-section area (ft²) — RM C132
+    res_trench_area <- (d_ft + 2) * (bd_ft + d_ft + td_ft) +
+                      (bd_ft + d_ft + td_ft)^2 * tan(trench_angle_rad)
 
-      # Trench volume (cy) — RM C133-C134
-      res_trench_vol_cy <- res_trench_area * buried_res_pipe_length / 27
+    # Trench volume (cy) — RM C133-C134
+    res_trench_vol_cy <- res_trench_area * buried_res_pipe_length / 27
 
-      # Bedding volume (cy) — RM C136
-      bdg_d_ft <- bedding_pct * d_ft
-      res_bedding_area <- (d_ft + 2) * (bd_ft + bdg_d_ft) +
-                          (bd_ft + bdg_d_ft)^2 * tan(trench_angle_rad) -
-                          ((d_ft/2)^2 * acos(pmax(-1, pmin(1, (d_ft/2 - bdg_d_ft) / (d_ft/2)))) -
-                          (d_ft/2 - bdg_d_ft) * sqrt(pmax(0, 2*(d_ft/2)*bdg_d_ft - bdg_d_ft^2)))
-      res_bedding_vol_cy <- res_bedding_area * buried_res_pipe_length / 2 / 27
+    # Bedding volume (cy) — RM C136
+    bdg_d_ft <- bedding_pct * d_ft
+    res_bedding_area <- (d_ft + 2) * (bd_ft + bdg_d_ft) +
+                        (bd_ft + bdg_d_ft)^2 * tan(trench_angle_rad) -
+                        ((d_ft/2)^2 * acos(pmax(-1, pmin(1, (d_ft/2 - bdg_d_ft) / (d_ft/2)))) -
+                        (d_ft/2 - bdg_d_ft) * sqrt(pmax(0, 2*(d_ft/2)*bdg_d_ft - bdg_d_ft^2)))
+    res_bedding_vol_cy <- res_bedding_area * buried_res_pipe_length / 2 / 27
 
-      # Thrust block volume (cy) — RM C131
-      thrust_block_table <- data.frame(
-        min_diam = c(0, 2.1, 3.1, 4.1, 6.1, 8.1, 10.1, 12.1,
-                     14.1, 16.1, 18.1, 20.1, 24.1, 28.1, 30.1, 40.1, 42.1),
-        force_kg = c(347.6, 681.9, 1260.0, 2835.0, 4990.7, 7813.4, 11192.3, 15314.3,
-                     20002.3, 25315.5, 31130.7, 45064.3, 61050.6, 70505.4, 124768.6,
-                     137828.6, 180257.3)
-      )
-      thrust_idx       <- max(which(thrust_block_table$min_diam <= res_pipe_diam))
-      res_thrust_force <- thrust_block_table$force_kg[thrust_idx] * 2.2
-      res_bearing_area <- 1.5 * res_thrust_force /
-                          (soil_dens * (td_ft + d_ft) * Coeff_Kp * Reduction)
-      H_tb <- sqrt(res_bearing_area / 2)
-      L_tb <- res_bearing_area / H_tb
-      F_tb <- max(0.5, d_ft)
-      T_tb <- L_tb / 2
-      res_block_vol_cy <- (T_tb + (buried_res_pipe_length / 12) / 2) * (L_tb + F_tb) / 2 * H_tb / 27
-    }
+    # Thrust block volume (cy) — Engineering Data sheet, rows 204-222
+    # (section header: "Thrust Blocks for Yard Piping"; columns: Pipe Diameter
+    # [inches] / Thrust Force [kg] / Based on 90-degree angles).
+    # force_kg values are taken at full workbook precision; min_diam is the
+    # lower-bound diameter for each lookup row.
+    thrust_block_table <- data.frame(
+      min_diam = c(0, 2.1, 3.1, 4.1, 6.1, 8.1, 10.1, 12.1,
+                   14.1, 16.1, 18.1, 20.1, 24.1, 28.1, 30.1, 40.1, 42.1),
+      force_kg = c(347.6356303747203, 681.9118184304477, 1260.008744050887,
+                   2835.0196741144964, 4990.743976700596, 7813.410623912632,
+                   11192.326806056015, 15314.284822868764, 20002.331197216343,
+                   25315.450421476933, 31130.71776716037, 45064.32657260045,
+                   61050.59668166591, 70505.38547821615, 124768.59941751491,
+                   137828.56340581886, 180257.3062904018)
+    )
+    thrust_idx       <- max(which(thrust_block_table$min_diam <= res_pipe_diam))
+    res_thrust_force <- thrust_block_table$force_kg[thrust_idx] * 2.2
+    res_bearing_area <- 1.5 * res_thrust_force /
+                        (soil_dens * (td_ft + d_ft) * Coeff_Kp * Reduction)
+    H_tb <- sqrt(res_bearing_area / 2)
+    L_tb <- res_bearing_area / H_tb
+    F_tb <- max(0.5, d_ft)
+    T_tb <- L_tb / 2
+    res_block_vol_cy <- (T_tb + (buried_res_pipe_length / 12) / 2) * (L_tb + F_tb) / 2 * H_tb / 27
   
-  # ── 7. Piping installation costs ──────────────────────────────────────────
+  # ── 7. Residuals burial cost (WBS 3.4.2 / 3.4.3 / 3.4.5 / 3.4.6) ──────────
+  # Unit costs mirror populate_wbs_values exactly so compile_capital_costs and
+  # the WBS table rows always agree.  The old "piping_installation_cost" applied
+  # excavation/bedding/backfill to ALL pipes via total_pipe_length — that was
+  # wrong because above-ground pipes inside the building have no trench costs.
+  # Only the buried residuals discharge pipe (add_res_pipe_length = 40 ft) has
+  # genuine installation sub-items, and those are already sized as res_*_vol_cy.
+  res_excav_uc    <- get_cost_data_uc("excavate_cost_cl",   default = 30.88)
+  res_bedding_uc  <- 45.35   # pipe_bedding_cost_cl — matches populate_wbs_values
+  res_backfill_uc <- get_cost_data_uc("backfill_cost_cl",   default = 18.65)
+  res_block_uc    <- get_cost_data_uc("conc_basin_cost_cl", default = 739.61)
+
+  res_burial_cost <- (res_trench_vol_cy  * res_excav_uc)    +   # 3.4.2
+                     (res_bedding_vol_cy * res_bedding_uc)  +   # 3.4.3
+                     (res_trench_vol_cy  * res_backfill_uc) +   # 3.4.5 (same qty as 3.4.2)
+                     (res_block_vol_cy   * res_block_uc)        # 3.4.6
+
+  # Retained for backward compatibility but no longer used by compile_capital_costs.
   excavation_cy     <- (total_pipe_length * 2 * 3) / 27
   bedding_cy        <- (total_pipe_length * 2 * 0.5) / 27
   backfill_cy       <- excavation_cy
   thrust_block_cy   <- (total_pipe_length / 100) * 0.5
-
   excavation_cost   <- excavation_cy   * 31
   bedding_cost      <- bedding_cy      * 45
   backfill_cost     <- backfill_cy     * 19
   thrust_block_cost <- thrust_block_cy * 740
-
   piping_installation_cost <- excavation_cost + bedding_cost + backfill_cost + thrust_block_cost
 
-  total_piping_cost <- piping_cost + piping_installation_cost
+  total_piping_cost <- piping_cost + res_burial_cost
 
   # ── 8. Valve sizing and costing ───────────────────────────────────────────
   # Valve size matches the process pipe diameter (workbook convention)
@@ -1858,6 +1875,7 @@ calculate_piping_valves <- function(
     res_block_vol_cy       = res_block_vol_cy,
     res_trench_area        = res_trench_area,
     res_flow_gpm           = res_flow_gpm,
+    res_burial_cost        = res_burial_cost,
 
 
     breakdown = data.frame(
@@ -2640,11 +2658,14 @@ calculate_site_buildings <- function(include_buildings, include_hvac, include_la
   shed_uc <- 50.742289444355997
   concrete_pad_uc <- 492.74999999999994
 
-  building_cost <- if (!retrofit) {
-    build1_fp_est * shed_uc + concrete_pad_uc
-  } else 0
-
   concrete_pad_qty <- if (design_flow < 0.5 && !retrofit) 1 else 0
+
+  # shed_cost and concrete_pad_cost are kept separate so the WBS table can
+  # render WBS 14.1.1 (building structure only) and WBS 14.5 (concrete pad)
+  # as distinct line items without double-counting.
+  shed_cost     <- if (!retrofit) build1_fp_est * shed_uc else 0
+  concrete_pad_cost <- concrete_pad_qty * concrete_pad_uc
+  building_cost <- shed_cost + concrete_pad_cost   # total = 14.1.1 + 14.5
 
   building_footprint_sf <- build1_fp_est
 
@@ -2664,15 +2685,16 @@ calculate_site_buildings <- function(include_buildings, include_hvac, include_la
   sitework_cost_wb <- building_footprint_sf * sitework_sf_cl
 
   list(
-    building_cost         = building_cost,
+    building_cost         = building_cost,       # shed + pad; equals WBS 14.1.1 + 14.5
+    shed_cost             = shed_cost,           # WBS 14.1.1 only (no pad)
     land_cost             = land_cost,
-    site_work_cost        = sitework_cost_wb,   # ← workbook formula: tech_fp × $15.19/sf
+    site_work_cost        = sitework_cost_wb,    # indirect cost — tech_fp × $15.19/sf
     total_cost            = building_cost + land_cost + sitework_cost_wb,
     building_footprint_sf = building_footprint_sf,
     sitework_sf_cl        = sitework_sf_cl,
     concrete_pad_qty      = concrete_pad_qty,
     concrete_pad_uc       = concrete_pad_uc,
-    concrete_pad_tc       = concrete_pad_qty * concrete_pad_uc
+    concrete_pad_tc       = concrete_pad_cost    # WBS 14.5 only
   )
 }
 
@@ -2725,7 +2747,7 @@ calculate_site_buildings <- function(include_buildings, include_hvac, include_la
 
 #' Compile all capital costs
 compile_capital_costs <- function(contactors, gac, pumps, tanks, piping, controls, site,
-                                  include_land = FALSE, include_permits = FALSE, include_pilot = FALSE,
+                                  include_land = FALSE, include_permits = TRUE, include_pilot = FALSE,
                                   include_pilot_addon = TRUE,  # workbook Sheet7 default = 1
                                   retrofit = FALSE, design_flow_mgd = 1,
                                   design_type = 1,        # 1 = pressure, 2 = gravity basin
@@ -2752,27 +2774,38 @@ compile_capital_costs <- function(contactors, gac, pumps, tanks, piping, control
   equipment_cost <- equipment_cost + valve_cost
 
   piping_material_cost  <- if (!is.null(piping$piping_material_cost))  piping$piping_material_cost  else piping$piping_cost
-  piping_install_cost   <- if (!is.null(piping$piping_installation_cost)) piping$piping_installation_cost else 0
-  materials_cost        <- gac$initial_fill_cost + piping_material_cost
+  # Residuals pipe material (WBS 3.4.1) was previously excluded from total_direct.
+  res_pipe_mat          <- if (!is.null(piping$res_pipe_material_cost)) piping$res_pipe_material_cost else 0
+  # Residuals burial cost (WBS 3.4.2/3.4.3/3.4.5/3.4.6): replaces the old
+  # piping_installation_cost which incorrectly applied trench costs to all pipes.
+  piping_install_cost   <- if (!is.null(piping$res_burial_cost)) piping$res_burial_cost else 0
+  materials_cost        <- gac$initial_fill_cost + piping_material_cost + res_pipe_mat
   controls_cost         <- controls$total_cost
 
   site_work_cost <- if (!is.null(site$site_work_cost)) site$site_work_cost
                     else site$total_cost - (if (!is.null(site$building_cost)) site$building_cost else 0)
   building_cost  <- if (!is.null(site$building_cost)) site$building_cost else 0
 
-  # Excel: process_cost = equipment + materials + piping_install + controls + site_work
-  process_cost <- equipment_cost + materials_cost + piping_install_cost + controls_cost + site_work_cost
+  # Workbook OUTPUT C318: process_cost = equipment + materials + piping_install + controls
+  # site_work_cost is an INDIRECT cost (Appendix D / OUTPUT C335) — it must NOT be in
+  # process_cost or it would be double-counted in total_project (it is already in
+  # sitework_cost_indirect below). The WBS table also has no row for site work under
+  # direct capital, so including it in process_cost caused the WBS sum vs total_direct gap.
+  process_cost <- equipment_cost + materials_cost + piping_install_cost + controls_cost
   # Excel: direct_cost  = process_cost + building_cost
   total_direct <- process_cost + building_cost
 
   message(sprintf("Process cost components:"))
   message(sprintf("  Equipment:      $%.0f (contactors=$%.0f, pumps=$%.0f, tanks=$%.0f)",
                   equipment_cost, contactors$total_cost, pumps$total_cost, tanks$total_cost))
-  message(sprintf("  Materials:      $%.0f (GAC=$%.0f, piping_material=$%.0f)",
-                  materials_cost, gac$initial_fill_cost, piping_material_cost))
-  message(sprintf("  Piping install: $%.0f", piping_install_cost))
+  message(sprintf("  Materials:      $%.0f (GAC=$%.0f, piping_material=$%.0f, res_pipe=$%.0f)",
+                  materials_cost, gac$initial_fill_cost, piping_material_cost, res_pipe_mat))
+  message(sprintf("  Piping install: $%.0f (res burial: 3.4.2/3/5/6)", piping_install_cost))
   message(sprintf("  Controls:       $%.0f", controls_cost))
-  message(sprintf("  Site work:      $%.0f", site_work_cost))
+  message(sprintf("  Building:       $%.0f (shed=$%.0f, pad=$%.0f)", building_cost,
+                  if (!is.null(site$shed_cost)) site$shed_cost else 0,
+                  if (!is.null(site$concrete_pad_tc)) site$concrete_pad_tc else 0))
+  message(sprintf("  Site work:      $%.0f (indirect — not in direct capital)", site_work_cost))
   message(sprintf("  Valves:         $%.0f", valve_cost))
   message(sprintf("  Building:       $%.0f", building_cost))
   message(sprintf("  Total direct:   $%.0f", total_direct))
@@ -2962,8 +2995,11 @@ compile_capital_costs <- function(contactors, gac, pumps, tanks, piping, control
     c(2.6, 2.3, 2.2, 1.8, 1.6, 1.5, 1.5, 1.4)
   )
 
-  # Building #1 value for permit calc = building_cost from site object
-  bldg1_val <- as.numeric(site$building_cost %||% 0)
+  # Building #1 value for permit calc = shed cost only (excludes concrete pad).
+  # Workbook uses shed_cost ($1,522.27 for 30 sf default) not the combined building_cost
+  # which adds the concrete pad ($492.75). Including the pad incorrectly crosses a UBC
+  # bracket boundary and overstates the building permit by ~$68.
+  bldg1_val <- as.numeric(site$shed_cost %||% site$building_cost %||% 0)
 
   # Row 80: Building permit = multiplier × BPCost_UBC97(building_value)
   bldg_permit <- ubc_mult * bpcost_ubc97(bldg1_val)
@@ -3080,7 +3116,7 @@ compile_capital_costs <- function(contactors, gac, pumps, tanks, piping, control
     equipment_cost          = equipment_cost,
     materials_cost          = materials_cost,
     controls_cost           = controls_cost,
-    site_cost               = site_work_cost + building_cost,
+    site_cost               = building_cost,   # site_work is indirect; only building in direct
     building_cost           = building_cost,
     process_cost            = process_cost,
     total_direct            = total_direct,
@@ -3179,16 +3215,18 @@ calculate_om_costs <- function(
     design_flow_mgd,       
     average_flow_mgd,      
     gac_results,           
-    pump_results,          
-    contactor_results,     
+    pump_results,
+    contactor_results,
     tank_results,          # from calculate_tanks — for res_flow_annual_gal
-    site_results,          
+    site_results,
+    controls_results = NULL,  # from calculate_controls — for instrument/FM counts (O&M rows 12-13)
     regen_type  = "regeneration off-site (non-hazardous)",
     design_type = 1,       # 1=pressure, 2=gravity
     automation_level = "fully automated",
     residuals_disposal = "potw",
     retrofit    = FALSE,
-    backwash_interval = 168,  
+    backwash_interval = 168,
+    transfer_method_om = "manual transfer",  # drives media changeout labor (row 31)
     num_trains  = NULL,    # passed from calculate_gac_system (pressure design)
     total_num_basins = NULL  # passed from calculate_gac_system (gravity design)
   ) {
@@ -3230,21 +3268,35 @@ calculate_om_costs <- function(
   }
 
   # ── Derived counts (workbook O&M sheet rows 11-20) ───────────────────────────
-  # instruments, pumps, valves — pulled from sub-results where available
-  tot_fm_in   <- safe_n(contactor_results$tot_fm_in,   1)
-  tot_fm_proc <- safe_n(contactor_results$tot_fm_proc, 0)
-  tot_fm_bw   <- safe_n(contactor_results$tot_fm_bw,   0)
-  tot_level_switch <- safe_n(contactor_results$tot_level_switch, 0)
-  tot_turb    <- safe_n(contactor_results$tot_turb_meters, 0)
-  tot_head    <- safe_n(contactor_results$tot_head_sens, 0)
-  pH_ctrl     <- safe_n(contactor_results$pH_controls, 0)
-  tot_temp    <- safe_n(contactor_results$tot_temp_sensors, 0)
-  tot_sampling <- safe_n(contactor_results$tot_sampling_ports, 0)
-  # O&M row 12: tot_inst = instruments for daily observation
-  tot_inst      <- max(1, tot_fm_in + tot_fm_proc + tot_level_switch + tot_turb +
-                          tot_head + pH_ctrl + tot_temp + tot_sampling)
-  # O&M row 13: tot_inst_maint = all instruments for PM (adds backwash FM)
-  tot_inst_maint <- tot_inst + tot_fm_bw
+  # Instrument counts come from controls_results (calculate_controls output).
+  # contactor_results is the vessel-sizing result and does NOT carry these fields.
+  # Workbook I&C sheet / CDA rows 105-125 are the authoritative source.
+  ctrl <- controls_results  # shorthand; NULL-safe via safe_n defaults below
+
+  tot_fm_in        <- safe_n(ctrl$tot_fm_in,        1)   # CDA C105: influent FM
+  tot_fm_proc      <- safe_n(ctrl$tot_fm_proc,       0)   # CDA C107: process FM/vessel
+  tot_fm_back      <- safe_n(ctrl$tot_fm_back,       1)   # CDA C108: backwash FM (PM only, not daily obs)
+  tot_fm_res       <- safe_n(ctrl$tot_fm_res,        1)   # residuals FM (PM only, not daily obs)
+  tot_level_switch <- safe_n(ctrl$tot_level_switch,  0)
+  tot_turb         <- safe_n(ctrl$tot_turb_meters,   0)
+  tot_head         <- safe_n(ctrl$tot_head_sens,     0)
+  pH_ctrl          <- safe_n(ctrl$pH_controls,       0)
+  tot_temp         <- safe_n(ctrl$tot_temp_meters,   0)
+  # NOTE: ctrl$ports = sampling connection ports (physical fittings, not electronic instruments).
+  # The workbook O&M row 12 does NOT include sampling ports in tot_inst — they require
+  # no daily observation or PM labour. Exclude them here.
+
+  # O&M row 12: tot_inst = instruments requiring daily observation (influent/process FMs + sensors)
+  # Workbook: 1 (influent FM) + 0 (no process FM, no sensors for this scenario) = 1
+  tot_inst <- max(1, tot_fm_in + tot_fm_proc + tot_level_switch + tot_turb +
+                     tot_head + pH_ctrl + tot_temp)
+
+  # O&M row 13: tot_inst_maint = ALL instruments needing PM.
+  # Workbook formula: tot_inst + tot_fm_back + tot_fm_res
+  #   = 1 (influent FM) + 1 (backwash FM) + 1 (residuals FM) = 3
+  # Bug was: only added one term (tot_fm_bw=0 from wrong source), giving 1 instead of 3,
+  # causing op_pm_inst to be 2 hr/yr instead of 6 hr/yr (-4 hr shortfall in Operator_LOE).
+  tot_inst_maint <- tot_inst + tot_fm_back + tot_fm_res
 
   booster_pumps  <- safe_n(pump_results$booster_pumps,   0)
   backwash_pumps <- safe_n(pump_results$backwash_pumps,  0)
@@ -3309,7 +3361,7 @@ calculate_om_costs <- function(
   uloe_fp         <- 1    # min/100sf/day
   uloe_autoback   <- 1    # min/event (automated)
   uloe_throwaway  <- 8/(20*27)  # hrs/cf
-  backwash_time   <- 30   # minutes per backwash event (default)
+  backwash_time   <- 10   # minutes per backwash event (CDA C62 default)
   Manager_percent  <- 0.10
   Clerical_percent <- 0.10
   Weekly_labor    <- 1    # hr/week/basin (gravity)
@@ -3336,10 +3388,18 @@ calculate_om_costs <- function(
   op_backwash <- if (manual %in% c(1L, 2L)) backwash_yr * 2 * backwash_time/60
                  else backwash_yr * uloe_autoback/60
   # Row 31: Managing media changeouts
-  transfer_method <- 2  # default: mechanical
-  transfer_time   <- 2  # hrs/changeout for mechanical
-  op_media <- if (transfer_method == 3) media_changes_cf * uloe_throwaway
-              else media_changes * transfer_time
+  # transfer_method_om: "manual transfer" → hrs/cf formula; mechanical → hrs/changeout
+  # CDA C75: transfer_time = 4 hrs (time to empty bed, mechanical). Workbook default is
+  # manual transfer for small systems, which uses media_changes_cf × uloe_throwaway.
+  transfer_time   <- 4   # hrs/changeout (CDA C75, mechanical systems)
+  op_media <- {
+    tm <- tolower(trimws(as.character(transfer_method_om %||% "manual")))
+    if (grepl("manual", tm)) {
+      media_changes_cf * uloe_throwaway
+    } else {
+      media_changes * transfer_time
+    }
+  }
   # Row 32: Managing residual solids (simplified)
   op_res_solids <- 0  # default: no solid handling labour (POTW discharge)
 
@@ -3456,25 +3516,27 @@ calculate_om_costs <- function(
   lighting_cost <- lighting_mwh * energy_cost_cl * 1000
 
   # Row 387: Ventilation
-  # ventilation: from HVAC sheet, simplified here
-  # For small systems: shed with no mechanical ventilation or minimal
-  # Workbook: ventilation = MIN(1, Operator_LOE/(24*365)) * (build1_fp * air_changes * ceiling_ht / 60 / 1000) * fan_days
-  air_changes_contactor <- 3   # air changes/hr
-  ceiling_ht_ft <- 10          # assumed
+  # Workbook (HVAC sheet): cfm = building_fp × building_height × air_changes / 60
+  #   building_height = 12 ft (HVAC C6)
+  #   air_changes_contactor = 3 ac/hr (O&M Assumptions C39); weighted avg = 2.6
+  #   for a small system the HVAC sheet uses the raw required footprint (fp_required),
+  #   not the 30 sf minimum, which gives: 26 × 12 × 3/60 = 15.6 cfm
+  # Fan power formula (O&M Assumptions C43): cfm × pressure_lbs_per_ft2 / 550 × 0.7457 kW/hp
+  #   fan_pressure_drop = 0.25 lbs/ft² → fan_kw = cfm × 0.25/550 × 0.7457
+  # Annual MWh = fan_kw × fan_days × 24 / 1000
+  air_changes_contactor <- 3     # ac/hr (O&M Assumptions C39)
+  building_height_ft    <- 12    # ft (HVAC C6)
+  fan_pressure_drop     <- 0.25  # lbs/ft² (O&M Assumptions C43)
   fan_days <- if (ss_cat2 == 1) 90 else if (ss_cat2 == 2) 120 else 185
-  # Fan power: air_cfm * fan_eff * 0.7457/1000 kW, simplified to volume-based
+  # Use contactor footprint (fp_required) if available; fall back to building_footprint_sf.
+  # The HVAC sheet computes cfm from the raw required footprint, not the clamped 30 sf min.
+  contactor_fp <- safe_n(contactor_results$footprint_sf_per_train, 0) *
+                  safe_n(contactor_results$num_trains, 1)
+  hvac_fp <- if (contactor_fp > 0) contactor_fp else total_fp
   ventilation_mwh <- if (include_buildings) {
-    cfm <- total_fp * ceiling_ht_ft * air_changes_contactor / 60
-    # Fan power at 0.5" WG: ~0.0001 kW/cfm (rough)
-    fan_kw <- cfm * 0.0001
+    build1_cfm <- hvac_fp * building_height_ft * air_changes_contactor / 60
+    fan_kw     <- build1_cfm * fan_pressure_drop / 550 * 0.7457
     fan_kw * fan_days * 24 / 1000  # MWh/yr
-  } else 0
-  # Use workbook value as better estimate: lighting+ventilation combo
-  # Workbook for 0.03 MGD: lighting=0.000365 MWh, ventilation=0.01143 MWh
-  # Fallback to the workbook Operator_LOE fraction method
-  ventilation_mwh <- if (include_buildings) {
-    min(1, Operator_LOE / (24*365)) * total_fp * air_changes_contactor *
-      ceiling_ht_ft / 60 * fan_days * 24 / 1e6
   } else 0
   ventilation_cost <- ventilation_mwh * energy_cost_cl * 1000
 
@@ -3492,18 +3554,19 @@ calculate_om_costs <- function(
     else 2L
   }
   # Row 399: POTW discharge fee
-  # Workbook: annual backwash water = water_flush_gpm × backwash_time_min × events_per_yr_per_vessel
+  # Workbook: annual backwash water = water_flush_gpm × backwash_time_min × backwash_yr
   #   where water_flush = ROUND(12 gpm/ft² × vessel_SA, 0)
-  #   and events_per_yr_per_vessel = 365 × 24 / backwash_interval_hrs
-  # (Each vessel backwashes independently; staggered scheduling means 1 vessel at a time)
+  #   backwash_yr = total events/yr across ALL vessels (already computed above)
+  #   backwash_time = 10 min (CDA C62), not 30
+  # Bug fix: was using events_per_yr_om (per-vessel) instead of backwash_yr (all vessels),
+  # and backwash_time was wrong (30 min hardcoded, CDA says 10 min).
   vessel_diam_om <- safe_n(contactor_results$diameter, 0)
   water_flush_om <- if (vessel_diam_om > 0)
     round(12 * pi * (vessel_diam_om / 2)^2, 0)
   else
-    safe_n(tank_results$res_flow_annual_gal, 0) / backwash_time / (365 * 24 / backwash_interval)
-  events_per_yr_om  <- 365 * 24 / backwash_interval  # per vessel
+    safe_n(tank_results$res_flow_annual_gal, 0) / backwash_time / backwash_yr
   res_flow_annual_gal <- if (vessel_diam_om > 0)
-    water_flush_om * backwash_time * events_per_yr_om
+    water_flush_om * backwash_time * backwash_yr   # gpm × min × total_events = gal/yr
   else
     safe_n(tank_results$res_flow_annual_gal, 0)
   # POTW_fee = base_cost_avg/month × 12 + vol_cost_avg/1000gal × res_flow_annual_gal/1000
@@ -3603,10 +3666,18 @@ calculate_om_costs <- function(
     ventilation_cost      = ventilation_cost,
     energy_total          = total_energy_cost,
     energy_cost_cl        = energy_cost_cl,
+    # MWh/yr quantities (for display — workbook OUTPUT col C, rows 381-387)
+    pump_energy_mwh       = pump_energy_mwh,
+    back_pump_energy_mwh  = back_pump_energy_mwh,
+    res_pump_energy_mwh   = res_pump_energy_mwh,
+    lighting_mwh          = lighting_mwh,
+    ventilation_mwh       = ventilation_mwh,
 
     # ── Residuals ────────────────────────────────────────────────────────────
-    potw_fee         = potw_fee,
+    potw_fee            = potw_fee,
     res_flow_annual_gal = res_flow_annual_gal,
+    # Effective $/gal rate (workbook OUTPUT col E, row 399)
+    potw_rate_per_gal   = if (res_flow_annual_gal > 0) potw_fee / res_flow_annual_gal else 0,
 
     # ── Misc & total ─────────────────────────────────────────────────────────
     misc_allowance   = misc_allowance,
@@ -4146,11 +4217,12 @@ calculate_gac_system <- function(params) {
           om_r <- calculate_om_costs(
             design_flow_mgd = design_flow_mgd, average_flow_mgd = average_flow_mgd,
             gac_results = gac_r, pump_results = pmp_r, contactor_results = con_r,
-            tank_results = tnk_r, site_results = sit_r,
+            tank_results = tnk_r, site_results = sit_r, controls_results = ctl_r,
             regen_type = p$regen_type %||% "regeneration off-site (non-hazardous)",
             design_type = 2L, automation_level = p$automation_level,
             residuals_disposal = p$residuals_disposal %||% "potw",
             retrofit = p$retrofit, backwash_interval = p$backwash_interval,
+            transfer_method_om = p$transfer_method %||% "manual transfer",
             num_trains = as.numeric(n_try), total_num_basins = as.numeric(total_num_c)
           )
 
@@ -4672,11 +4744,12 @@ calculate_gac_system <- function(params) {
           om_r <- calculate_om_costs(
             design_flow_mgd = design_flow_mgd, average_flow_mgd = average_flow_mgd,
             gac_results = gac_r, pump_results = pmp_r, contactor_results = con_r,
-            tank_results = tnk_r, site_results = sit_r,
+            tank_results = tnk_r, site_results = sit_r, controls_results = ctl_r,
             regen_type = p$regen_type %||% "regeneration off-site (non-hazardous)",
             design_type = 1L, automation_level = p$automation_level,
             residuals_disposal = p$residuals_disposal %||% "potw",
             retrofit = p$retrofit, backwash_interval = p$backwash_interval,
+            transfer_method_om = p$transfer_method %||% "manual transfer",
             num_trains = as.numeric(n_try), total_num_basins = NULL
           )
           # Workbook OUTPUT C413: useful_life = ROUND((direct_for_UL + addon + indirect) /
@@ -5460,6 +5533,8 @@ calculate_gac_system <- function(params) {
     residuals_disposal = params$residuals_disposal %||% "potw",
     retrofit           = params$retrofit,
     backwash_interval  = params$backwash_interval,
+    transfer_method_om = params$transfer_method %||% "manual transfer",
+    controls_results   = controls_results,
     num_trains         = as.numeric(params$num_trains %||% 2),
     total_num_basins   = if (!is.null(total_num_basins_calc)) as.numeric(total_num_basins_calc) else NULL
   )

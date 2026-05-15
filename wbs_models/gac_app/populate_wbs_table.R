@@ -880,12 +880,14 @@ populate_wbs_values <- function(wbs, item_lower, contactors, tanks, piping, pump
   }
 
   # ── 14.1.1 / 14.2.1 / 14.3.1 / 14.4.1  Buildings ────────────────────────────
-  # Design Size = building footprint (sf); unit cost from bpcost_ubc97 polynomial
+  # Design Size = building footprint (sf); unit cost from bpcost_ubc97 polynomial.
+  # Use shed_cost (structure only, no concrete pad) so that WBS 14.5 can render
+  # the pad as a separate line item without double-counting building_cost.
   if (grepl("^14\\.[1-4]\\.1$", wbs)) {
     qty <- 1L                                          # always 1 building
     ds  <- site$building_footprint_sf %||% NA_real_   # sf
     uc  <- site$building_uc           %||% NA_real_   # $/sf equivalent (total/sf)
-    tc  <- site$building_cost         %||% NA_real_
+    tc  <- site$shed_cost             %||% site$building_cost %||% NA_real_
   }
 
   # ── 14.5  Concrete Pad ───────────────────────────────────────────────────────
@@ -1126,12 +1128,31 @@ build_wbs_table <- function(data) {
       `Useful Life`                = useful_life
     )
   
-  # ── Stage 4: Format and render ────────────────────────────────────────────
+  # ── Stage 4: Sum check — WBS rows vs. compile_capital_costs total_direct ──
+  # The sum of all populated Total Cost cells should equal capital_costs$total_direct.
+  # A discrepancy indicates costs that are included in compile_capital_costs but
+  # have no corresponding WBS row (or vice versa).
+  wbs_row_sum <- sum(df$total_cost, na.rm = TRUE)
+  ref_total   <- capital_costs$total_direct %||% NA_real_
+  if (!is.na(ref_total)) {
+    diff <- ref_total - wbs_row_sum
+    if (abs(diff) > 1) {
+      message(sprintf(
+        "[WBS SumCheck] WBS row sum = $%.0f | capital_costs$total_direct = $%.0f | diff = $%.0f",
+        wbs_row_sum, ref_total, diff
+      ))
+    } else {
+      message(sprintf("[WBS SumCheck] OK — WBS sum matches total_direct ($%.0f)", ref_total))
+    }
+  }
+
+  # ── Stage 5: Format and render ────────────────────────────────────────────
   # Preserve ordered unique section names (the table column = RowGroup labels)
   # for the sticky nav bar in mod_output_db.R
   section_names <- unique(df$table[!is.na(df$table)])
 
   list(
+    # dt       = format_wbs_table(df, total_direct = ref_total),
     dt       = format_wbs_table(df),
     sections = section_names
   )

@@ -532,7 +532,7 @@ safe_as_logical <- function(x, default = FALSE) {
 #'
 #' @param wbs_data  Data frame produced by populate_wbs_table().
 #' @return A DT::datatable object ready for renderDT().
-format_wbs_table <- function(wbs_data) {
+format_wbs_table <- function(wbs_data, total_direct = NULL) {
   wbs_data <- wbs_data |>
     dplyr::mutate(
       section   = table,
@@ -598,7 +598,50 @@ format_wbs_table <- function(wbs_data) {
           stampIds();
           api.on('draw', stampIds);
         }
-      ")
+       ")
+      # ,
+      # # ── Total Direct Capital Cost footer row ──────────────────────────────
+      # # Appended after every draw so it survives search/filter redraws.
+      # # Column indices (0-based, matching wbs_data column order):
+      # #   8 = Unit Cost  — used for the right-aligned label
+      # #   9 = Total Cost — populated with the column sum
+      # drawCallback = DT::JS("
+      #   function(settings) {
+      #     var api = this.api();
+
+      #     // Sum the raw numeric Total Cost values (col 9) across all rows,
+      #     // ignoring search/filter so the total always reflects the full dataset.
+      #     var colData = api.column(9, {search: 'none'}).data();
+      #     var sum = colData.reduce(function(acc, val) {
+      #       return acc + (typeof val === 'number' ? val : 0);
+      #     }, 0);
+      #     var fmt = '$' + Math.round(sum).toLocaleString('en-US');
+
+      #     // Remove any existing total row to avoid duplication on redraws.
+      #     $(api.table().node()).find('tr.wbs-total-row').remove();
+
+      #     // Build a row with the same number of <td> cells as a data row,
+      #     // then stamp the label into the Unit Cost cell (index 8) and the
+      #     // formatted sum into the Total Cost cell (index 9).
+      #     var firstRow = $(api.table().body()).find('tr:first');
+      #     var nCells   = firstRow.find('td').length;
+      #     if (nCells === 0) return;   // table is empty
+
+      #     var cells = [];
+      #     for (var i = 0; i < nCells; i++) {
+      #       cells.push($('<td>').css('background', '#f0f7f4'));
+      #     }
+      #     cells[8]
+      #       .text('TOTAL DIRECT CAPITAL COST')
+      #       .css({'text-align': 'right', 'font-weight': 'bold', 'padding': '6px 8px'});
+      #     cells[9]
+      #       .text(fmt)
+      #       .css({'text-align': 'right', 'font-weight': 'bold', 'padding': '6px 8px'});
+
+      #     var tr = $('<tr class=\"wbs-total-row\">').append(cells);
+      #     $(api.table().body()).append(tr);
+      #   }
+      # ")
     ),
     rownames   = FALSE,
     extensions = "RowGroup",

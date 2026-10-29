@@ -63,7 +63,7 @@ get_sabs <- function(ids, size) {
 ```
 
 ```{r}
-ors_api_key("eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjkxMDRlNmE2YmY0YzRhNmE4NGM4NTlmMTNiNmFjZWNjIiwiaCI6Im11cm11cjY0In0=")
+ors_api_key("insert-api-key-here")
 
 ors_distance_matrix <- function(src_geom, dst_geoms) {
   src_coords <- st_coordinates(st_centroid(src_geom))

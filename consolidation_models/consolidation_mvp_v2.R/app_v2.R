@@ -603,7 +603,7 @@ server <- function(input, output, session) {
     leaflet() %>%
       addMapPane("receiving",     zIndex = 410) %>%
       addMapPane("Joining", zIndex = 420) %>%
-      addProviderTiles(providers$CartoDB.Positron) %>%
+      addProviderTiles(providers$Esri.WorldGrayCanvas) %>%
       fitBounds(bb[1], bb[2], bb[3], bb[4])
   })
 
